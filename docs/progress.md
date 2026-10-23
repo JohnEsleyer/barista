@@ -4,7 +4,7 @@ This is the canonical tracker for Barista's implementation progress. Update it a
 
 **Last updated:** 2026-10-23
 **Current phase:** Phase 3 complete; Phase 4 next
-**Latest implementation commit:** `PENDING` — Implement Phase 3 runtime, strings, arrays, and exceptions
+**Latest implementation commit:** `d12ee43` — Implement Phase 3 runtime, strings, arrays, and exceptions
 
 ---
 
@@ -207,7 +207,7 @@ Begin Phase 4 with the smallest Kotlin-capable end-to-end slice:
 | 2026-10-23 | Implemented Phase 1 classfile parsing, IR lowering, codegen, CLI, and tests | `10fbff6` |
 | 2026-10-23 | Added the canonical development progress tracker | `841af41` |
 | 2026-10-23 | Implemented Phase 2 objects, fields, dispatch, descriptors, and CFG | `e17b3cd` |
-| 2026-10-23 | Implemented Phase 3 runtime shims, strings, arrays, exception dispatch, and `ldc` constants | `PENDING` |
+| 2026-10-23 | Implemented Phase 3 runtime shims, strings, arrays, exception dispatch, and `ldc` constants | `d12ee43` |
 
 ## Related Records
 
