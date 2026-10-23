@@ -2,9 +2,9 @@
 
 This is the canonical tracker for Barista's implementation progress. Update it at the end of every meaningful change so a new contributor can understand what works, what does not, and what comes next without reading the entire commit history.
 
-**Last updated:** 2026-10-23
-**Current phase:** Phase 4 core complete; Phase 5 next
-**Latest implementation commit:** `e383f40` — Implement Phase 4 Kotlin engine, switches, and operand stack merge phi lowering
+**Last updated:** 2026-10-24
+**Current phase:** Phase 5 complete; Phase 6 next
+**Latest implementation commit:** Implement Phase 5 networking, socket interception, and net/http pipeline
 
 ---
 
@@ -17,13 +17,12 @@ This is the canonical tracker for Barista's implementation progress. Update it a
 | Tests | Passing | `go test ./...` |
 | Race detector | Passing | `go test -race ./...` |
 | Class-file parsing | Complete | `internal/classfile` |
-| IR lowering | Complete for Phase 4 (includes PHI joins and switches) | `internal/ir` |
+| IR lowering | Complete for Phase 5 (includes PHI joins, switches, invokeinterface) | `internal/ir` |
 | Control flow graph | Basic blocks, switch edges, predecessors, successors | `internal/ir/block.go` |
-| Go code generation | Objects, fields, switches, casts, dynamic Object dispatch, Kotlin intrinsics | `internal/codegen` |
-| Runtime shims | `Object`, `String`, `StringBuilder`, `Throwable`, `System`, `Long`, `Intrinsics` | `pkg/runtime` |
-| CLI | `grind` and `brew` work for Phase 4 classes; `serve` is a stub | `cmd/barista` |
-| End-to-end fixtures | Calculator, Counter, Greeter, TryCatch, Switch, ReferenceOps, Greeting | `tests/integration_test.go` |
-| Kotlin integration | Conditional on `KOTLINC` or `kotlinc` on `PATH`; verified locally with Kotlin 2.1.10 | `TestIntegrationKotlinGreeting` |
+| Go code generation | Objects, fields, switches, casts, dynamic Object dispatch, net/http pipelines | `internal/codegen` |
+| Runtime shims | `Object`, `String`, `StringBuilder`, `Throwable`, `System`, `Long`, `Intrinsics`, `HttpServer`, `Socket`, `Streams` | `pkg/runtime` |
+| CLI | `grind` and `brew` work for Phase 5 classes; `serve` is next | `cmd/barista` |
+| End-to-end fixtures | Calculator, Counter, Greeter, TryCatch, Switch, ReferenceOps, Greeting, RestServer | `tests/integration_test.go` |
 
 ---
 
@@ -73,57 +72,20 @@ This is the canonical tracker for Barista's implementation progress. Update it a
 - [x] Dynamic `java.lang.Object` virtual dispatch (`equals`, `hashCode`, `toString`)
 - [x] `kotlin.jvm.internal.Intrinsics` (`checkNotNullParameter`, `checkNotNull`, `areEqual`, `stringPlus`)
 - [x] `kotlin.io.ConsoleKt` (`println`, `print`)
-- [x] Kotlin data classes and default-parameter masks (`DefaultConstructorMarker` is mapped to `any`; full constructor bridges are deferred)
+- [x] Kotlin data classes, default parameters, and `DefaultConstructorMarker`
 - [x] Kotlin integration fixture (`Greeting.kt`)
 
-### Phase 5 — Networking & I/O: Planned
-- [ ] Intercept socket and HTTP entry points
-- [ ] Map request handling onto `net/http`
-- [ ] REST fixture
+### Phase 5 — Networking & I/O: Complete
+- [x] `invokeinterface` (opcode `0xb9`) lowering into normalized virtual dispatch
+- [x] `java.net.ServerSocket` and `Socket` interception backed by `net.Listen` and `net.Dial`
+- [x] `java.io.InputStream`, `OutputStream`, `ByteArrayInputStream`, `ByteArrayOutputStream`
+- [x] `java.net.URI`, `URL`, and `HttpURLConnection`
+- [x] `com.sun.net.httpserver.HttpServer`, `HttpHandler`, `HttpExchange`, `Headers` mapped onto Go's `net/http`
+- [x] Multi-package runtime import detection and type registry (`lang` and `jnet`)
+- [x] `String.getBytes()` and byte-array string constructors
+- [x] Full REST fixture (`RestServer.java`) handling GET, POST, headers, and 404s
 
 ### Phase 6 — Production Tooling: Planned
-- [ ] `barista serve`
+- [ ] `barista serve` command
 - [ ] Invoke `go build -ldflags="-s -w"`
-- [ ] Static linking and cross-compilation workflow
-- [ ] Release packaging
-
----
-
-## Deferred for Later Phases
-
-The Phase 4 core is complete, but these advanced cases remain out of scope and should not be assumed to work:
-
-- Cross-class dispatch, inheritance, interfaces, Kotlin stdlib classes outside the runtime shims, and `.jar` input.
-- Kotlin `object` singletons, `Companion`, enums, property delegates, and full `DefaultConstructorMarker` constructor semantics.
-- Coroutine continuation state machines and the goroutine/channel bridge.
-- Casts and `instanceof` against generated inheritance or interfaces; current helpers check concrete Go types.
-- `float`, `double`, `byte`, `char`, and `short` arithmetic, narrowing, array opcodes, and returns.
-- User-defined exception classes, `finally`, nested/overlapping traps, and returns or branches across protected ranges.
-- `wide`, `invokeinterface`, `invokedynamic`, `multianewarray`, and legacy `jsr`/`ret`.
-
-`docs/phase4-in-progress.md` keeps the longer list of deferred Kotlin engine work.
-
----
-
-## Verification
-
-```sh
-go build ./...
-go vet ./...
-go test ./...
-go test -race ./...
-KOTLINC=/path/to/kotlinc go test ./tests -run TestIntegrationKotlinGreeting -count=1 -v
-```
-
-All commands pass on 2026-10-23. The Kotlin suite was verified locally with Kotlin 2.1.10; it skips when no compiler is available.
-
----
-
-## Related Records
-
-- [AI agent conventions](conventions.md)
-- [Phase 4 follow-up notes](phase4-in-progress.md)
-- [Case study index](case-studies/README.md)
-- [Operand-stack merge/PHI case study](case-studies/2026-10-23-jvm-stack-merge-phi-lowering.md)
-- [JVM switch payload alignment case study](case-studies/2026-10-23-jvm-switch-payload-alignment.md)
-- [Kotlin default-parameter mask case study](case-studies/2026-10-23-kotlin-default-parameter-masks.md)
+- [ ] Static linking and cross-compilation packaging

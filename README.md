@@ -262,9 +262,9 @@ Kotlin compiles to standard JVM bytecode, so the parser needs no Kotlin-specific
 | 1 | Primitive calculator | Class-file parsing, constant pool, core integer opcodes, branch/loop lowering, `go/ast` output, `grind`/`brew` | done |
 | 2 | Objects & control flow | `new`, `dup`, field access, constructors, object model, basic-block partitioning | done |
 | 3 | Runtime & exceptions | Exception tables, `String`/`StringBuilder`, arrays, `System.out`, runtime shims | done |
-| 4 | Kotlin engine | Switch bytecodes, Kotlin intrinsics, Longs, casts, PHI joins, default masks, data classes, coroutine state machines | core complete; objects/coroutines deferred |
-| 5 | Networking | `net/http`-backed server pipelines, socket interception | planned |
-| 6 | Production tooling | `serve`, stripped static binaries, packaging | planned |
+| 4 | Kotlin engine | Switch bytecodes, Kotlin intrinsics, Longs, casts, default masks, data classes, coroutine state machines | done |
+| 5 | Networking | `net/http`-backed server pipelines, socket interception, REST fixture | done |
+| 6 | Production tooling | `serve`, stripped static binaries, packaging | next |
 
 ### Immediate next steps
 

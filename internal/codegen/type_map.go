@@ -5,24 +5,59 @@ import (
 	"strings"
 )
 
-var runtimeTypeNames = map[string]string{
-	"java/lang/Object":                    "Object",
-	"java/lang/String":                    "String",
-	"java/lang/StringBuilder":             "StringBuilder",
-	"java/lang/Class":                     "Class",
-	"java/lang/Throwable":                 "Throwable",
-	"java/lang/Exception":                 "Exception",
-	"java/lang/RuntimeException":          "RuntimeException",
-	"java/lang/NullPointerException":      "NullPointerException",
-	"java/lang/IndexOutOfBoundsException": "IndexOutOfBoundsException",
-	"java/lang/ClassCastException":        "ClassCastException",
-	"java/lang/Long":                      "Long",
-	"java/io/PrintStream":                 "PrintStream",
+type runtimeTypeInfo struct {
+	pkg  string
+	name string
+}
+
+var runtimeTypes = map[string]runtimeTypeInfo{
+	"java/lang/Object":                    {"lang", "Object"},
+	"java/lang/String":                    {"lang", "String"},
+	"java/lang/StringBuilder":             {"lang", "StringBuilder"},
+	"java/lang/Class":                     {"lang", "Class"},
+	"java/lang/Throwable":                 {"lang", "Throwable"},
+	"java/lang/Exception":                 {"lang", "Exception"},
+	"java/lang/RuntimeException":          {"lang", "RuntimeException"},
+	"java/lang/NullPointerException":      {"lang", "NullPointerException"},
+	"java/lang/IndexOutOfBoundsException": {"lang", "IndexOutOfBoundsException"},
+	"java/lang/ClassCastException":        {"lang", "ClassCastException"},
+	"java/lang/Long":                      {"lang", "Long"},
+	"java/io/PrintStream":                 {"lang", "PrintStream"},
+	"java/io/IOException":                 {"lang", "IOException"},
+
+	// Phase 5: Networking & I/O
+	"java/net/Socket":                     {"jnet", "Socket"},
+	"java/net/ServerSocket":               {"jnet", "ServerSocket"},
+	"java/net/InetSocketAddress":          {"jnet", "InetSocketAddress"},
+	"java/net/SocketAddress":              {"jnet", "SocketAddress"},
+	"java/net/URI":                        {"jnet", "URI"},
+	"java/net/URL":                        {"jnet", "URL"},
+	"java/net/HttpURLConnection":          {"jnet", "HttpURLConnection"},
+	"com/sun/net/httpserver/HttpServer":   {"jnet", "HttpServer"},
+	"com/sun/net/httpserver/HttpExchange": {"jnet", "HttpExchange"},
+	"com/sun/net/httpserver/HttpHandler":  {"jnet", "HttpHandler"},
+	"com/sun/net/httpserver/Headers":      {"jnet", "Headers"},
+	"com/sun/net/httpserver/HttpContext":  {"jnet", "HttpContext"},
+	"java/io/InputStream":                 {"jnet", "InputStream"},
+	"java/io/OutputStream":                {"jnet", "OutputStream"},
+	"java/io/ByteArrayOutputStream":       {"jnet", "ByteArrayOutputStream"},
+	"java/io/ByteArrayInputStream":        {"jnet", "ByteArrayInputStream"},
 }
 
 func runtimeTypeName(internalName string) (string, bool) {
-	name, ok := runtimeTypeNames[internalName]
-	return name, ok
+	info, ok := runtimeTypes[internalName]
+	if !ok {
+		return "", false
+	}
+	return info.name, true
+}
+
+func runtimeTypePkg(internalName string) string {
+	info, ok := runtimeTypes[internalName]
+	if !ok {
+		return "lang"
+	}
+	return info.pkg
 }
 
 func langType(name string) ast.Expr {
@@ -55,8 +90,8 @@ func DescriptorToGoType(desc string) ast.Expr {
 	default:
 		if strings.HasPrefix(desc, "L") && strings.HasSuffix(desc, ";") {
 			raw := desc[1 : len(desc)-1]
-			if name, ok := runtimeTypeName(raw); ok {
-				return langType(name)
+			if info, ok := runtimeTypes[raw]; ok {
+				return &ast.StarExpr{X: &ast.SelectorExpr{X: ast.NewIdent(info.pkg), Sel: ast.NewIdent(info.name)}}
 			}
 			return &ast.StarExpr{X: ast.NewIdent(CleanClassName(raw))}
 		}

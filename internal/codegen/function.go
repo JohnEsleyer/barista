@@ -254,10 +254,10 @@ func (e *funcEmitter) emit(inst ir.Instruction) error {
 		if inst.Result == nil || inst.OwnerClass == "" {
 			return fmt.Errorf("NEW with invalid metadata in %s", e.mir.Name)
 		}
-		objType, ok := runtimeTypeName(inst.OwnerClass)
+		info, ok := runtimeTypes[inst.OwnerClass]
 		var compositeType ast.Expr
 		if ok {
-			compositeType = &ast.SelectorExpr{X: ast.NewIdent("lang"), Sel: ast.NewIdent(objType)}
+			compositeType = &ast.SelectorExpr{X: ast.NewIdent(info.pkg), Sel: ast.NewIdent(info.name)}
 		} else {
 			compositeType = ast.NewIdent(CleanClassName(inst.OwnerClass))
 		}
@@ -441,8 +441,9 @@ func (e *funcEmitter) emit(inst ir.Instruction) error {
 			if inst.OwnerClass == "java/lang/Long" && inst.MemberName == "hashCode" {
 				callName = "LongHashCode"
 			}
+			pkgIdent := runtimeTypePkg(inst.OwnerClass)
 			call = &ast.CallExpr{
-				Fun:  langSelector(callName),
+				Fun:  &ast.SelectorExpr{X: ast.NewIdent(pkgIdent), Sel: ast.NewIdent(callName)},
 				Args: make([]ast.Expr, 0, len(inst.Args)),
 			}
 		} else {

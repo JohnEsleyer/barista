@@ -104,3 +104,56 @@ func (s *String) HashCode() int32 {
 func (s *String) ToString() *String {
 	return s
 }
+
+// Init initializes or constructs a String instance from bytes or strings.
+func (s *String) Init(args ...any) *String {
+	if s == nil {
+		return s
+	}
+	if len(args) == 0 {
+		s.value = ""
+		return s
+	}
+	switch v := args[0].(type) {
+	case []int8:
+		if len(args) >= 3 {
+			off := args[1].(int32)
+			length := args[2].(int32)
+			if off >= 0 && length >= 0 && int(off+length) <= len(v) {
+				buf := make([]byte, length)
+				for i := 0; i < int(length); i++ {
+					buf[i] = byte(v[int(off)+i])
+				}
+				s.value = string(buf)
+				return s
+			}
+		}
+		buf := make([]byte, len(v))
+		for i, b := range v {
+			buf[i] = byte(b)
+		}
+		s.value = string(buf)
+	case []byte:
+		s.value = string(v)
+	case string:
+		s.value = v
+	case *String:
+		if v != nil {
+			s.value = v.value
+		}
+	}
+	return s
+}
+
+// GetBytes encodes this String into a sequence of bytes using UTF-8, returning []int8.
+func (s *String) GetBytes() []int8 {
+	if s == nil {
+		return nil
+	}
+	raw := []byte(s.value)
+	res := make([]int8, len(raw))
+	for i, b := range raw {
+		res[i] = int8(b)
+	}
+	return res
+}

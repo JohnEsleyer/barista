@@ -119,6 +119,16 @@ func NewClassCastException(message *String) *ClassCastException {
 	return &ClassCastException{RuntimeException: RuntimeException{Exception: Exception{Throwable: Throwable{Message: message}}}}
 }
 
+// IOException is the native shim for java.io.IOException.
+type IOException struct {
+	Exception
+}
+
+// NewIOException constructs an IOException with the given message.
+func NewIOException(message *String) *IOException {
+	return &IOException{Exception: Exception{Throwable: Throwable{Message: message}}}
+}
+
 func throwableClassName(t *Throwable) string {
 	if t == nil {
 		return "java.lang.Throwable"
@@ -144,6 +154,8 @@ func AsThrowable(value any) *Throwable {
 		return &v.RuntimeException.Exception.Throwable
 	case *ClassCastException:
 		return &v.RuntimeException.Exception.Throwable
+	case *IOException:
+		return &v.Exception.Throwable
 	default:
 		return nil
 	}
@@ -160,11 +172,14 @@ func MatchesException(value any, className string) bool {
 		return AsThrowable(value) != nil
 	case "java/lang/Exception":
 		switch value.(type) {
-		case *Exception, *RuntimeException, *NullPointerException, *IndexOutOfBoundsException, *ClassCastException:
+		case *Exception, *RuntimeException, *NullPointerException, *IndexOutOfBoundsException, *ClassCastException, *IOException:
 			return true
 		default:
 			return false
 		}
+	case "java/io/IOException":
+		_, ok := value.(*IOException)
+		return ok
 	case "java/lang/RuntimeException":
 		switch value.(type) {
 		case *RuntimeException, *NullPointerException, *IndexOutOfBoundsException, *ClassCastException:

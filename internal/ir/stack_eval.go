@@ -119,6 +119,7 @@ const (
 	BytecodeIfnull        = 0xc6
 	BytecodeIfnonnull     = 0xc7
 	BytecodeGotoW         = 0xc8
+	BytecodeInvokeinterface = 0xb9
 )
 
 // LowerBytecode translates JVM bytecode into normalized IR without resolving
@@ -970,12 +971,16 @@ func LowerMethodWithExceptions(cp classfile.ConstantPool, ownerClass, methodName
 				Descriptor: desc,
 			})
 
-		case BytecodeInvokevirtual, BytecodeInvokespecial, BytecodeInvokestatic:
+		case BytecodeInvokevirtual, BytecodeInvokespecial, BytecodeInvokestatic, BytecodeInvokeinterface:
 			index, err := readU2(code, pc)
 			if err != nil {
 				return nil, err
 			}
-			pc += 2
+			if op == BytecodeInvokeinterface {
+				pc += 4 // 2 bytes index, 1 byte count, 1 byte reserved zero
+			} else {
+				pc += 2
+			}
 			owner, name, desc, err := cp.ResolveMethodRef(index)
 			if err != nil {
 				return nil, err
@@ -996,7 +1001,7 @@ func LowerMethodWithExceptions(cp classfile.ConstantPool, ownerClass, methodName
 
 			var opKind OpKind
 			switch op {
-			case BytecodeInvokevirtual:
+			case BytecodeInvokevirtual, BytecodeInvokeinterface:
 				opKind = OpInvokeVirtual
 			case BytecodeInvokestatic:
 				opKind = OpInvokeStatic
@@ -1604,6 +1609,11 @@ func decodeInstruction(code []byte, pc int) (decodedInstruction, error) {
 			targets = append(targets, c.TargetPC)
 		}
 		return decodedInstruction{size: nextPC - pc, targets: targets}, nil
+	case BytecodeInvokeinterface:
+		if pc+5 > len(code) {
+			return decodedInstruction{}, fmt.Errorf("truncated opcode 0x%02X at pc %d", op, pc)
+		}
+		return decodedInstruction{size: 5}, nil
 	case BytecodeGotoW:
 		if pc+5 > len(code) {
 			return decodedInstruction{}, fmt.Errorf("truncated goto_w at pc %d", pc)

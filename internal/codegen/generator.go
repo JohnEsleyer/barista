@@ -24,12 +24,21 @@ func GenerateGo(cf *classfile.ClassFile, methods []*ir.MethodIR) ([]byte, error)
 		Decls: make([]ast.Decl, 0),
 	}
 
-	importSpecs := make([]*ast.ImportSpec, 0, 2)
+	importSpecs := make([]*ast.ImportSpec, 0, 3)
 	if needsLang(cf, methods) {
 		importSpecs = append(importSpecs, &ast.ImportSpec{
 			Path: &ast.BasicLit{
 				Kind:  token.STRING,
 				Value: strconv.Quote(langRuntimeImport),
+			},
+		})
+	}
+	if needsNet(methods) {
+		importSpecs = append(importSpecs, &ast.ImportSpec{
+			Name: ast.NewIdent("jnet"),
+			Path: &ast.BasicLit{
+				Kind:  token.STRING,
+				Value: strconv.Quote(netRuntimeImport),
 			},
 		})
 	}
