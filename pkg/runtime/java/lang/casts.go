@@ -1,6 +1,9 @@
 package lang
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+)
 
 // Long is the boxed form of java.lang.Long. Kotlin data classes normally use
 // the primitive J descriptor; this shim keeps boxed Long references usable.
@@ -54,6 +57,14 @@ func (l *Long) ToString() *String {
 // String lets Long satisfy fmt.Stringer.
 func (l *Long) String() string {
 	return l.ToString().GoString()
+}
+
+// MarshalJSON allows *Long to be serialized as a native JSON number.
+func (l *Long) MarshalJSON() ([]byte, error) {
+	if l == nil {
+		return []byte("null"), nil
+	}
+	return []byte(strconv.FormatInt(l.Value, 10)), nil
 }
 
 // LongHashCode implements the static java.lang.Long.hashCode(J) intrinsic.

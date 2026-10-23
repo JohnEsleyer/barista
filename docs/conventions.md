@@ -2,18 +2,30 @@
 
 This document defines working conventions for AI agents contributing to Barista. Its purpose is to preserve engineering context so future agents can build on what has already been learned instead of rediscovering it.
 
+## Scope Discipline
+
+[`docs/barista-first.md`](barista-first.md) defines the product direction. Barista targets **new Kotlin/Java services written against the Barista SDK**, not arbitrary legacy JVM compatibility.
+
+Before starting work, ask:
+
+- Does this support a concrete Barista-first use case?
+- Is the capability part of the documented subset, or does it expand arbitrary JVM compatibility?
+- Can the behavior be verified with a fixture and an end-to-end test?
+
+Work that only broadens JVM compatibility without an SDK use case is out of scope. If a task changes the product scope, update `barista-first.md`, `progress.md`, and `README.md` together.
+
 ## Progress Tracking
 
 [`docs/progress.md`](progress.md) is the canonical development tracker. At the end of every meaningful task:
 
-- Update the current phase and status.
+- Update the current focus and status.
 - Check off completed capabilities only when a test or reproducible command proves them.
 - Add or remove known limitations.
 - Record the verification result and the latest implementation commit.
 - Set the exact next task.
 - Link any new case study.
 
-Do not mark a phase complete based only on code being written. The tracker must reflect verified behaviour.
+Do not mark a capability complete based only on code being written. The tracker must reflect verified behaviour.
 
 ## The Case Study Rule
 

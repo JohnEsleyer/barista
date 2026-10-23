@@ -2,6 +2,8 @@
 
 Short, searchable records of non-obvious problems encountered while building Barista and how they were resolved. The goal is to give future contributors — human or AI — enough context to avoid repeating the same investigation.
 
+These case studies document compiler and runtime internals. They remain valid under the Barista-first direction in [`../barista-first.md`](../barista-first.md); only the product scope has narrowed.
+
 Each case study follows the naming convention, structure, and quality bar defined in [`../conventions.md`](../conventions.md).
 
 ## Index

@@ -1,7 +1,9 @@
 # Phase 4 — Follow-up Notes
 
+> **Historical note:** This document records compiler work from the earlier generic-JVM phase. Barista now targets new code written against the Barista SDK; see [`barista-first.md`](barista-first.md) for the current direction. The technical findings and open compiler problems below remain useful, but compatibility work should now be justified by a concrete Barista-first use case.
+
 **Date:** 2026-10-23
-**Status:** Phase 4 core complete; deferred work open
+**Status:** Historical compiler notes; deferred work remains open
 **Scope:** Kotlin engine: switches, intrinsics, default-parameter masks, Longs, casts, PHI joins, and the Kotlin fixture.
 
 ## What Works

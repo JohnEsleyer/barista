@@ -1,6 +1,9 @@
 package lang
 
-import "unicode/utf16"
+import (
+	"encoding/json"
+	"unicode/utf16"
+)
 
 // String is the native shim for java.lang.String.
 type String struct {
@@ -24,6 +27,24 @@ func (s *String) GoString() string {
 // String lets String satisfy fmt.Stringer while keeping GoString explicit.
 func (s *String) String() string {
 	return s.GoString()
+}
+
+// MarshalJSON allows *String to be serialized as a native JSON string.
+func (s *String) MarshalJSON() ([]byte, error) {
+	if s == nil {
+		return []byte("null"), nil
+	}
+	return json.Marshal(s.value)
+}
+
+// UnmarshalJSON allows native JSON strings to be deserialized into *String.
+func (s *String) UnmarshalJSON(data []byte) error {
+	var str string
+	if err := json.Unmarshal(data, &str); err != nil {
+		return err
+	}
+	s.value = str
+	return nil
 }
 
 // Length returns the number of UTF-16 code units, matching Java semantics for

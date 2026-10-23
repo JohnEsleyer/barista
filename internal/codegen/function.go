@@ -270,9 +270,6 @@ func (e *funcEmitter) emit(inst ir.Instruction) error {
 		if inst.Result == nil || len(inst.Args) != 1 {
 			return fmt.Errorf("GET_FIELD with invalid operands in %s", e.mir.Name)
 		}
-		if inst.OwnerClass != "" && inst.OwnerClass != e.cf.ThisClass {
-			return fmt.Errorf("GET_FIELD %s.%s refers to external class %s; only single-class field access is supported yet", inst.OwnerClass, inst.MemberName, inst.OwnerClass)
-		}
 		e.assignResult(inst.Result, &ast.SelectorExpr{
 			X:   ast.NewIdent(inst.Args[0].String()),
 			Sel: ast.NewIdent(CleanMemberName(inst.MemberName)),
@@ -281,9 +278,6 @@ func (e *funcEmitter) emit(inst ir.Instruction) error {
 	case ir.OpPutField:
 		if len(inst.Args) != 2 {
 			return fmt.Errorf("PUT_FIELD with invalid operands in %s", e.mir.Name)
-		}
-		if inst.OwnerClass != "" && inst.OwnerClass != e.cf.ThisClass {
-			return fmt.Errorf("PUT_FIELD %s.%s refers to external class %s; only single-class field access is supported yet", inst.OwnerClass, inst.MemberName, inst.OwnerClass)
 		}
 		e.append(&ast.AssignStmt{
 			Lhs: []ast.Expr{
@@ -310,17 +304,10 @@ func (e *funcEmitter) emit(inst ir.Instruction) error {
 				return nil
 			}
 		}
-		if inst.OwnerClass != "" && inst.OwnerClass != e.cf.ThisClass {
-			return fmt.Errorf("GET_STATIC %s.%s refers to external class %s; only single-class static state is supported yet", inst.OwnerClass, inst.MemberName, inst.OwnerClass)
-		}
 		e.assignResult(inst.Result, ast.NewIdent(staticFieldName(inst.OwnerClass, inst.MemberName)))
-
 	case ir.OpPutStatic:
 		if len(inst.Args) != 1 {
 			return fmt.Errorf("PUT_STATIC without a value in %s", e.mir.Name)
-		}
-		if inst.OwnerClass != "" && inst.OwnerClass != e.cf.ThisClass {
-			return fmt.Errorf("PUT_STATIC %s.%s refers to external class %s; only single-class static state is supported yet", inst.OwnerClass, inst.MemberName, inst.OwnerClass)
 		}
 		e.append(&ast.AssignStmt{
 			Lhs: []ast.Expr{ast.NewIdent(staticFieldName(inst.OwnerClass, inst.MemberName))},
@@ -370,9 +357,6 @@ func (e *funcEmitter) emit(inst ir.Instruction) error {
 				return fmt.Errorf("java/lang/Object.%s is not supported yet", inst.MemberName)
 			}
 		} else {
-			if inst.OwnerClass != "" && inst.OwnerClass != e.cf.ThisClass {
-				return fmt.Errorf("%s on external class %s is not supported yet; only single-class dispatch is implemented", inst.MemberName, inst.OwnerClass)
-			}
 			callName := resolveMethodName(e.methodNames, inst.OwnerClass, inst.MemberName, inst.Descriptor)
 			call = &ast.CallExpr{
 				Fun: &ast.SelectorExpr{
@@ -447,9 +431,6 @@ func (e *funcEmitter) emit(inst ir.Instruction) error {
 				Args: make([]ast.Expr, 0, len(inst.Args)),
 			}
 		} else {
-			if inst.OwnerClass != "" && inst.OwnerClass != e.cf.ThisClass {
-				return fmt.Errorf("static call %s.%s refers to external class %s; only single-class dispatch is implemented", inst.OwnerClass, inst.MemberName, inst.OwnerClass)
-			}
 			call = &ast.CallExpr{
 				Fun:  ast.NewIdent(resolveMethodName(e.methodNames, inst.OwnerClass, inst.MemberName, inst.Descriptor)),
 				Args: make([]ast.Expr, 0, len(inst.Args)),

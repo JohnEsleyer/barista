@@ -6,44 +6,102 @@
 
 # Barista
 
-> **Love writing Java or Kotlin? Deploy like Go.**
+> **Write Kotlin or Java. Ship a Go binary.**
 >
-> If you love writing Java or Kotlin, but you want to deploy apps that feel like Go programs — **sub-second builds, zero-effort cross-compilation, tiny 15MB RAM footprints, and smooth operation on $4/month VPS boxes** — Barista is built for you.
+> Barista is a Barista-first application framework and ahead-of-time language frontend. It lets you write new backend services in Kotlin or Java syntax, against a curated SDK, and compile them into a single static Go binary with no JVM at runtime.
 
-**Barista** is an ahead-of-time (AOT) static de-stacking compiler for JVM bytecode, written in Go. It ingests standard `.class` files produced by `javac` or `kotlinc`, reconstructs their stack-based execution model as a register/variable-based IR, and emits idiomatic Go source that is compiled into a single, statically linked binary. `.jar` archive input is planned.
+**Barista is not a legacy JVM compatibility layer.** It does not try to compile Spring Boot, Hibernate, reflection-heavy libraries, or arbitrary existing `.jar` files. That treadmill is effectively unbounded. Instead, Barista targets **new code written with Barista in mind**: expressive Kotlin or Java source, a small and explicit runtime contract, and Go's operational model underneath.
 
-You keep the language and toolchain you already love. You leave behind the JVM's operational baggage: no 200MB base runtime, no JIT warm-up spikes, no JRE packaging, and no guessing whether your app will fit on a $4/month box. Write Java or Kotlin; ship one native binary.
+You keep the language and toolchain you already love. You leave behind the JVM's operational baggage: no 200MB base runtime, no JIT warm-up spikes, no JRE packaging, and no guessing whether your service will fit on a $4/month box. Write Kotlin or Java; ship one native binary.
 
-> **Status:** Barista is under active development and features an end-to-end ahead-of-time pipeline: disassembling (`grind`), Go transpilation (`brew`), stripped static native binary compilation with cross-compilation (`build`), and instant memory compilation and execution (`serve`), accompanied by a real-time terminal progress bar. Kotlin `object` singletons, coroutines, and cross-class dispatch remain deferred; see the [known limitations](#known-limitations).
->
-> **Detailed progress:** [`docs/progress.md`](docs/progress.md) is the canonical tracker for completed capabilities, known limitations, test status, and the next task.
+> **Status:** Active development. The bytecode-to-Go compiler pipeline works end to end for the supported subset, including `grind`, `brew`, `build`, and `serve`. The Barista SDK, IDE lint plugin, framework APIs, and project scaffolding described below are the next major deliverable and are **not shipped yet**. See [`docs/progress.md`](docs/progress.md) for verified status and [`docs/barista-first.md`](docs/barista-first.md) for the product and engineering direction.
 
 ---
 
 ## Why Barista?
 
-You should not have to choose between JVM ergonomics and Go-like operations. Barista closes the gap:
+Most developers choose Kotlin or Java for the language: null safety, data classes, expressive collections, checked APIs, and mature IDE support. The JVM is often accepted as the price of admission, not the reason for the choice. Barista separates the two.
 
-| | JVM deployment | Barista deployment |
+GraalVM Native Image and Quarkus prove that developers want Go-like deployment without giving up JVM ergonomics. They still carry the complexity of the JVM ecosystem. Barista takes a narrower, more honest path: keep the syntax, define a focused SDK, and compile only what that SDK promises.
+
+The target operating model:
+
+| Concern | Traditional JVM deployment | Barista-first deployment |
 | --- | --- | --- |
-| **Build experience** | JVM build tooling plus JRE packaging | Go toolchain with sub-second rebuilds |
-| **Base runtime overhead** | OpenJDK reserves roughly 100–250MB RSS at boot | One static binary with no VM |
-| **JIT contention** | Compilation spikes compete for a single vCPU | No JIT; code is compiled ahead of time |
-| **Delayed reclamation** | G1/ZGC assume memory is plentiful and shrink lazily | Delegate allocation and GC to the Go runtime |
-| **Memory footprint** | 100MB+ before your application does any work | Target around 15MB RSS |
-| **Deployment footprint** | JRE + application JAR | One self-contained executable |
-| **Startup latency** | Hundreds of milliseconds to seconds | Target sub-5ms startup |
-| **Cross-compilation** | Platform-specific JREs | Inherited from the Go toolchain |
+| **Language** | Kotlin or Java | Kotlin or Java syntax |
+| **Runtime** | JVM plus JRE | Go runtime, no VM |
+| **Build** | Gradle/Maven plus JRE packaging | `kotlinc`/`javac` plus Barista and `go build` |
+| **Startup** | Hundreds of milliseconds to seconds | Target sub-5ms startup |
+| **Memory** | 100MB+ before application work | Target around 15MB RSS |
+| **Deployment** | JRE plus application JAR | One self-contained static executable |
+| **Cross-compilation** | Platform-specific JREs | Inherited from `GOOS`/`GOARCH` |
+| **Concurrency** | Thread pools and JVM schedulers | Goroutines and channels via the SDK |
+| **Scope** | Arbitrary legacy libraries | Curated Barista SDK and subset |
+| **Reflection** | Pervasive in frameworks | Rejected by the Barista subset |
 | **Hosting cost** | Needs headroom for the runtime itself | Smooth operation on $4/month VPS boxes |
+
+---
+
+## The Barista Model
+
+Barista is deliberately opinionated. The contract is what makes the project finite, testable, and fast.
+
+### 1. New code, written for Barista
+
+Barista is for services, APIs, workers, and CLI tools that you start today. It is not a migration tool for existing JVM applications. If a program depends on arbitrary JVM libraries, runtime class loading, bytecode instrumentation, or deep framework magic, it is outside the Barista subset.
+
+### 2. A curated SDK instead of the entire JVM
+
+Barista defines a lightweight `barista-sdk` for the APIs it supports. The SDK maps directly onto Go runtime primitives:
+
+- `barista.async.Channel<T>` and `go { ... }` for goroutines and channels.
+- `barista.http` for routing and request/response handling backed by `net/http`.
+- AOT-friendly JSON, configuration, logging, and database clients.
+- Annotations and interfaces that the compiler understands without reflection.
+
+### 3. An explicit, linted subset
+
+The supported language and library surface is documented and enforced. A Gradle/Maven lint plugin should reject unsupported constructs inside the IDE, before `barista build` runs. The compiler remains the final authority, but developers should not discover unsupported opcodes or library calls at the end of a build.
+
+### 4. Go semantics, Kotlin ergonomics
+
+Barista exposes Go's operational strengths directly rather than emulating JVM concurrency:
+
+- Goroutines replace ad-hoc thread pools.
+- Channels replace blocking queues.
+- `net/http` replaces servlet containers.
+- Static binaries replace JRE packaging.
+
+### 5. Composition over hierarchy
+
+Barista favors `data class`, `interface`, and composition. Deep abstract-class hierarchies, reflective dependency injection, and dynamic proxies are not part of the model. This keeps the generated Go small and the compiler tractable.
+
+### 6. AOT by default
+
+Routing, serialization, configuration, and dependency wiring should be generated ahead of time. No reflection, no classpath scanning, no startup-time graph construction.
+
+### 7. Native Go interop as an escape hatch
+
+The planned `@NativeGo` annotation lets Barista code call a Go package directly. That gives Kotlin and Java developers access to Go's Redis, Postgres, Kafka, cloud, and container clients without waiting for a JVM-compatible shim.
+
+### Non-goals
+
+Barista explicitly does **not** aim to support:
+
+- Existing Spring Boot, Hibernate, Micronaut, or Quarkus applications.
+- Arbitrary Maven/Gradle dependencies that were not written for Barista.
+- Reflection, dynamic proxies, runtime bytecode generation, or classpath scanning.
+- The complete JVM specification, JIT compilation, or JVM thread semantics.
+- Drop-in compatibility with legacy `.jar` archives.
 
 ---
 
 ## How It Works
 
-Barista is a non-reversing, five-stage pipeline:
+Barista stays bytecode-driven so that `kotlinc`, `javac`, and existing IDE tooling remain useful. The difference is that the input is a **Barista-targeted** program, not arbitrary JVM code.
 
 ```text
-Input: application .jar / .class
+Input: Barista-targeted .class files
               │
               ▼
 ┌──────────────────────────────────────────────────────────────┐
@@ -68,8 +126,8 @@ Input: application .jar / .class
 ┌──────────────────────────────────────────────────────────────┐
 │ 4. AST Generation & Go Code Emission                         │
 │    Map classes to structs and methods to pointer-receiver    │
-│    functions; inject native runtime shims; format with       │
-│    go/ast and go/printer.                                    │
+│    functions; inject native runtime and framework shims;     │
+│    format with go/ast and go/printer.                        │
 └──────────────────────────────┬───────────────────────────────┘
                                ▼
 ┌──────────────────────────────────────────────────────────────┐
@@ -150,6 +208,106 @@ The generated program does not ship `rt.jar`. Critical-path JDK and Kotlin APIs 
 - `com.sun.net.httpserver.HttpServer` / `HttpHandler` / `HttpExchange` / `Headers` — mapped directly onto Go's standard library `net/http` server.
 - Cast helpers — `CheckCast[T]`, `IsInstanceOf[T]`, and `CompareLong` for `checkcast`, `instanceof`, and `lcmp`.
 
+These shims are the compatibility floor for the Barista subset, not a promise to emulate the full JDK.
+
+---
+
+## The Barista SDK (Planned)
+
+The SDK is the product surface that makes Barista coherent. It is not shipped yet; the examples below define the target contract.
+
+### Dependency
+
+```kotlin
+// build.gradle.kts
+dependencies {
+    implementation("io.github.johnesleyer:barista-sdk:0.1.0")
+}
+```
+
+### Concurrency with Go semantics
+
+```kotlin
+import barista.async.*
+
+fun main() {
+    val ch = Channel<String>(buffer = 10)
+
+    go {
+        ch.send("Hello from a goroutine!")
+    }
+
+    println(ch.receive())
+}
+```
+
+`Channel<T>` maps to a Go channel. `go { ... }` maps to `go func() { ... }()`. There is no JVM thread pool and no continuation state machine to lower.
+
+### HTTP without a servlet container
+
+```kotlin
+import barista.http.*
+
+class UserApi : BaristaApp() {
+    override fun configure() {
+        get("/api/greet") { ctx ->
+            ctx.json(mapOf("status" to "ok", "message" to "Hello, World!"))
+        }
+
+        post("/api/echo") { ctx ->
+            ctx.text(ctx.bodyString())
+        }
+    }
+}
+```
+
+Routes are baked into the generated Go program and served by `net/http`. No reflection, classpath scanning, or runtime route discovery.
+
+### Spring-like annotations without Spring's runtime
+
+Barista should feel familiar to Spring developers without reproducing Spring's runtime machinery. The planned `barista.spring` annotation package is a compile-time surface, not a Spring compatibility layer:
+
+```kotlin
+import barista.spring.annotation.*
+
+@RestController
+@RequestMapping("/api/users")
+class UserController(private val userService: UserService) {
+
+    @GetMapping("/{id}")
+    fun getUser(@PathVariable id: Long): String {
+        return userService.findUser(id)
+    }
+
+    @PostMapping
+    fun createUser(@RequestBody name: String): Map<String, Any> {
+        return mapOf("status" to "created", "name" to name)
+    }
+}
+```
+
+The compiler reads the annotations from class metadata and emits:
+
+- Static constructor wiring instead of runtime dependency injection.
+- A hardcoded `net/http` route table instead of classpath scanning.
+- Direct handler calls instead of reflection or dynamic proxies.
+- Request parameter parsing generated from the method signature.
+
+The supported annotation set is intentionally small: routing, request binding, and simple component wiring. AOP, CGLIB proxies, runtime bean lookup, and annotation scanning are permanently out of scope.
+
+### Native Go interop
+
+```kotlin
+@NativeGo(pkg = "github.com/redis/go-redis/v9", symbol = "NewClient")
+external fun newRedisClient(options: RedisOptions): RedisClient
+```
+
+The compiler sees the annotation, adds the Go import, and emits a direct call. This is the planned escape hatch for libraries that are not part of the SDK.
+
+### IDE feedback before build time
+
+The SDK should ship with a Gradle/Maven lint plugin that rejects unsupported APIs and language constructs in the editor. The compiler remains the source of truth, but the feedback loop should not wait for a full native build.
+
 ---
 
 ## Repository Layout
@@ -197,6 +355,8 @@ barista/
 │       └── kotlin/
 │           └── jvm/                # Intrinsics and Kotlin runtime helpers
 ├── docs/
+│   ├── barista-first.md            # Product direction and SDK contract
+│   ├── evolution-plan.md           # Phased delivery plan
 │   ├── conventions.md              # AI-agent conventions and case-study rule
 │   ├── progress.md                 # Canonical development progress tracker
 │   └── case-studies/               # Recorded non-obvious problems and fixes
@@ -234,7 +394,7 @@ go test ./...
 ### Compile a fixture
 
 ```sh
-javac -d tests/fixtures/out tests/fixtures/java/Calculator.java
+javac -d tests/fixtures/out tests/fixtures/java/HelloBarista.java
 ```
 
 ---
@@ -272,21 +432,21 @@ javac -d tests/fixtures/out tests/fixtures/java/HelloBarista.java
 ./bin/barista serve tests/fixtures/out/HelloBarista.class World
 ```
 
-Barista's production tooling is fully wired: `build` emits stripped, statically linked binaries (`-ldflags="-s -w"`, `CGO_ENABLED=0`) and `serve` compiles in a temporary workspace and runs the result immediately. The supported lowering covers static and instance methods using `int`/`long` arithmetic, conditionals, loops, operand-stack PHI joins, objects, instance and static fields, constructors, same-class dispatch, strings, arrays, `System.out`, caught runtime exceptions, dense/sparse switches, `checkcast`, `instanceof`, dynamic `Object` methods, Kotlin `Intrinsics`, `invokeinterface`, sockets, and `net/http`-backed HTTP servers. Cross-class dispatch, inheritance, user-defined exception classes, Kotlin `object` singletons, and coroutines are skipped or rejected with a diagnostic until support lands.
-
 ---
 
-## Kotlin Support
+## Current Capabilities
 
-Kotlin compiles to standard JVM bytecode, so the parser needs no Kotlin-specific changes. The runtime and lowering do need to honour Kotlin's conventions:
+The compiler currently supports:
 
-- **Null checks:** `Intrinsics.checkNotNullParameter`, `checkNotNullExpressionValue`, `checkNotNull`, and the lateinit helpers are translated to Go runtime calls.
-- **Data classes:** generated `equals`, `hashCode`, `toString`, `copy`, and `componentN` methods lower as ordinary same-class bytecode, including `checkcast`, `instanceof`, `lcmp`, `Long.hashCode(J)I`, and `String.hashCode()I`.
-- **Default parameters:** `$default` bridges use ordinary `iand` + `ifeq` masks. No Kotlin-specific IR pass is required; `$` in method names is sanitised to `_` in Go.
-- **Switches:** `tableswitch` and `lookupswitch` are lowered to Go `switch` statements with `pc_<offset>` labels. This is also the foundation for coroutine state machines.
-- **Coroutines:** `tableswitch` / `lookupswitch` can represent Kotlin's continuation state machines. A later optimisation will detect `kotlin.coroutines.Continuation` parameters and dispatch the body as a goroutine over channels.
-- **Still planned:** `object` singletons, `Companion`, enums, property delegates, and the coroutine bridge.
-- **CI note:** the Kotlin integration test runs when `KOTLINC` or `kotlinc` is available and skips otherwise; pin a compiler in CI so it cannot skip silently.
+- Class-file parsing, constant-pool resolution, and method code attributes.
+- Control-flow graphs, branches, loops, and operand-stack PHI joins.
+- `int` and `long` arithmetic, conditionals, and switch bytecodes.
+- Objects, fields, constructors, and same-class method dispatch.
+- Strings, arrays, standard `java.lang` exceptions, and Kotlin intrinsics.
+- `checkcast`, `instanceof`, dynamic `Object` methods, and `invokeinterface`.
+- Sockets, streams, and `net/http`-backed HTTP servers through runtime shims.
+- Stripped, statically linked binaries with cross-compilation targets.
+- In-memory compile-and-run via `barista serve`.
 
 ---
 
@@ -300,8 +460,26 @@ Barista compiles a single class at a time and does not yet model the full JVM ru
 - Coroutines are not bridged to goroutines and channels yet.
 - `java.util.ArrayList` is not implemented.
 - `.jar` archive input is not supported; pass individual `.class` files.
+- The Barista SDK, lint plugin, framework APIs, and `barista new` scaffolding do not exist yet.
 
 See [`docs/progress.md`](docs/progress.md) for the canonical tracker of implementation status and test coverage.
+
+---
+
+## Where Barista Is Going
+
+The next work is organized around making the Barista-first contract real, not around expanding arbitrary JVM compatibility:
+
+1. **Link multi-class programs and ingest JARs.** Compile a complete application module, not just one `.class` file.
+2. **Publish the Barista subset specification.** Define the supported language constructs, SDK APIs, and compiler diagnostics.
+3. **Build `barista-sdk`.** Ship annotations, HTTP routing, async primitives, JSON, configuration, and logging APIs that map cleanly to Go.
+4. **Add the Spring-like AOT surface.** Support `barista.spring` routing and wiring annotations with zero reflection or runtime scanning.
+5. **Ship the IDE lint plugin.** Reject unsupported constructs in Gradle/Maven before a native build starts.
+6. **Add `barista new`.** Scaffold a Kotlin or Java service with the SDK, a dev server, and a production build.
+7. **Implement `@NativeGo` and `barista-bind`.** Generate direct Go imports and calls, plus Kotlin bindings for Go packages.
+8. **Grow conformance tests and benchmarks.** Every SDK promise needs a compiled fixture, an end-to-end assertion, and measured startup, memory, and binary-size results.
+
+The detailed product and engineering rationale lives in [`docs/barista-first.md`](docs/barista-first.md), and the phased delivery plan lives in [`docs/evolution-plan.md`](docs/evolution-plan.md).
 
 ---
 
@@ -312,6 +490,7 @@ See [`docs/progress.md`](docs/progress.md) for the canonical tracker of implemen
 3. **Deterministic output.** Same input bytecode and configuration should always produce the same Go source.
 4. **Fail loudly.** Unsupported opcodes and malformed class files produce actionable diagnostics rather than silently wrong code.
 5. **Incremental correctness.** Each capability is verified end-to-end with compiled fixtures before the next is added.
+6. **Finite scope.** The SDK contract, not the JVM ecosystem, defines what Barista supports.
 
 ---
 
@@ -322,7 +501,7 @@ See [`docs/progress.md`](docs/progress.md) for the canonical tracker of implemen
 3. Commit your changes: `git commit -m "Add my feature"`.
 4. Push and open a pull request.
 
-Please include a fixture and an integration test with compiler changes whenever possible.
+Please include a fixture and an integration test with compiler changes whenever possible. Changes that expand arbitrary JVM compatibility without a corresponding Barista SDK use case are out of scope.
 
 Before investigating a non-obvious issue, check [`docs/case-studies/`](docs/case-studies/) for prior findings. After solving a unique problem, record it using the template in [`docs/conventions.md`](docs/conventions.md) so the next contributor — human or AI — does not have to rediscover it.
 

@@ -97,6 +97,13 @@ func parseAttributes(r *Reader, cp ConstantPool, count uint16) ([]AttributeInfo,
 				return nil, fmt.Errorf("failed to parse LineNumberTable attribute: %w", err)
 			}
 			attrs = append(attrs, lineTable)
+		case "RuntimeVisibleAnnotations":
+			annTable, err := parseRuntimeVisibleAnnotations(info, cp)
+			if err != nil {
+				attrs = append(attrs, &RawAttribute{AttrName: name, Info: info})
+				continue
+			}
+			attrs = append(attrs, annTable)
 		default:
 			attrs = append(attrs, &RawAttribute{AttrName: name, Info: info})
 		}

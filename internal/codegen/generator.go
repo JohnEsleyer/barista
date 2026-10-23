@@ -25,6 +25,97 @@ func GenerateGo(cf *classfile.ClassFile, methods []*ir.MethodIR) ([]byte, error)
 // GenerateGoWithPackage translates a parsed ClassFile and lowered IR into clean Go code
 // with a specified Go package name.
 func GenerateGoWithPackage(cf *classfile.ClassFile, methods []*ir.MethodIR, pkgName string) ([]byte, error) {
+	methodNames := ResolveMethodNames(cf.ThisClass, methods)
+	return generateFile(cf, methods, pkgName, methodNames)
+}
+
+// ClassModule associates a parsed class with its lowered methods.
+type ClassModule struct {
+	ClassFile *classfile.ClassFile
+	Methods   []*ir.MethodIR
+}
+
+// GenerateModule generates one Go file per class for a multi-class module.
+// A single-module input preserves the single-class naming used by GenerateGo.
+func GenerateModule(modules []ClassModule, pkgName string) (map[string][]byte, error) {
+	if len(modules) == 0 {
+		return nil, fmt.Errorf("no classes to generate")
+	}
+	if len(modules) == 1 {
+		data, err := GenerateGoWithPackage(modules[0].ClassFile, modules[0].Methods, pkgName)
+		if err != nil {
+			return nil, err
+		}
+		return map[string][]byte{moduleFileName(modules[0].ClassFile): data}, nil
+	}
+
+	sorted := append([]ClassModule(nil), modules...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].ClassFile.ThisClass < sorted[j].ClassFile.ThisClass
+	})
+
+	methodNames := ResolveModuleMethodNames(sorted)
+	output := make(map[string][]byte, len(sorted))
+	for _, mod := range sorted {
+		data, err := generateFile(mod.ClassFile, mod.Methods, pkgName, methodNames)
+		if err != nil {
+			return nil, err
+		}
+		output[moduleFileName(mod.ClassFile)] = data
+	}
+	return output, nil
+}
+
+// ResolveModuleMethodNames builds a collision-free Go method name table for a
+// multi-class module. Static methods are prefixed with their owning class name
+// because they become package-level functions in the generated Go package.
+func ResolveModuleMethodNames(modules []ClassModule) map[string]string {
+	if len(modules) == 1 {
+		return ResolveMethodNames(modules[0].ClassFile.ThisClass, modules[0].Methods)
+	}
+
+	names := make(map[string]string)
+	usedStatic := make(map[string]bool)
+	usedInstance := make(map[string]map[string]bool)
+
+	for _, mod := range modules {
+		for _, mir := range mod.Methods {
+			owner := mir.OwnerClass
+			if owner == "" {
+				owner = mod.ClassFile.ThisClass
+			}
+			base := methodGoName(mir.Name)
+			name := base
+			if base != "init" {
+				if mir.IsStatic {
+					name = CleanClassName(owner) + "_" + base
+					if usedStatic[name] {
+						name = uniqueName(name, mir.Descriptor, usedStatic)
+					}
+					usedStatic[name] = true
+				} else {
+					used := usedInstance[owner]
+					if used == nil {
+						used = make(map[string]bool)
+						usedInstance[owner] = used
+					}
+					if used[name] {
+						name = uniqueName(name, mir.Descriptor, used)
+					}
+					used[name] = true
+				}
+			}
+			names[MethodKey(owner, mir.Name, mir.Descriptor)] = name
+		}
+	}
+	return names
+}
+
+func moduleFileName(cf *classfile.ClassFile) string {
+	return strings.ToLower(CleanClassName(cf.ThisClass)) + ".go"
+}
+
+func generateFile(cf *classfile.ClassFile, methods []*ir.MethodIR, pkgName string, methodNames map[string]string) ([]byte, error) {
 	file := &ast.File{
 		Name:  ast.NewIdent(pkgName),
 		Decls: make([]ast.Decl, 0),
@@ -76,29 +167,15 @@ func GenerateGoWithPackage(cf *classfile.ClassFile, methods []*ir.MethodIR, pkgN
 		}
 	}
 
-	usedNames := make(map[string]bool)
-	methodNames := make(map[string]string)
 	for _, mir := range methods {
 		owner := mir.OwnerClass
 		if owner == "" {
 			owner = cf.ThisClass
 		}
-		name := methodGoName(mir.Name)
-		if name != "init" {
-			if usedNames[name] {
-				name = uniqueName(name, mir.Descriptor, usedNames)
-			}
-			usedNames[name] = true
+		name := methodNames[MethodKey(owner, mir.Name, mir.Descriptor)]
+		if name == "" {
+			name = methodGoName(mir.Name)
 		}
-		methodNames[methodKey(owner, mir.Name, mir.Descriptor)] = name
-	}
-
-	for _, mir := range methods {
-		owner := mir.OwnerClass
-		if owner == "" {
-			owner = cf.ThisClass
-		}
-		name := methodNames[methodKey(owner, mir.Name, mir.Descriptor)]
 		fnDecl, err := buildFuncDecl(cf, mir, name, methodNames)
 		if err != nil {
 			return nil, err
@@ -120,9 +197,19 @@ func buildClassStruct(cf *classfile.ClassFile) *ast.GenDecl {
 		if f.IsStatic() {
 			continue
 		}
+
+		fieldName := CleanMemberName(f.Name)
+		jsonName := toLowerCamel(f.Name)
+
+		tagLit := &ast.BasicLit{
+			Kind:  token.STRING,
+			Value: fmt.Sprintf("`json:\"%s\"`", jsonName),
+		}
+
 		fields = append(fields, &ast.Field{
-			Names: []*ast.Ident{ast.NewIdent(CleanMemberName(f.Name))},
+			Names: []*ast.Ident{ast.NewIdent(fieldName)},
 			Type:  descriptorOrAny(f.Descriptor),
+			Tag:   tagLit,
 		})
 	}
 
@@ -137,6 +224,15 @@ func buildClassStruct(cf *classfile.ClassFile) *ast.GenDecl {
 			},
 		},
 	}
+}
+
+func toLowerCamel(s string) string {
+	if s == "" {
+		return ""
+	}
+	runes := []rune(s)
+	runes[0] = unicode.ToLower(runes[0])
+	return string(runes)
 }
 
 func buildStaticFieldDecl(cf *classfile.ClassFile, field classfile.MemberInfo) *ast.GenDecl {

@@ -19,14 +19,15 @@ import (
 
 // BuildOptions configures the ahead-of-time compilation pipeline.
 type BuildOptions struct {
-	ClassFile   *classfile.ClassFile
-	Methods     []*ir.MethodIR
-	OutputPath  string
-	TargetOS    string
-	TargetArch  string
-	Static      bool
-	Entrypoint  string
-	OnProgress  func(step int, total int, message string)
+	ClassFile  *classfile.ClassFile
+	Hierarchy  *classfile.ClassHierarchy
+	Methods    []*ir.MethodIR
+	OutputPath string
+	TargetOS   string
+	TargetArch string
+	Static     bool
+	Entrypoint string
+	OnProgress func(step int, total int, message string)
 }
 
 // BuildResult captures metrics from a successful binary compilation.
@@ -51,12 +52,21 @@ func ParseTarget(target string) (string, string, error) {
 	return parts[0], parts[1], nil
 }
 
-// Build compiles a JVM class into a single static binary.
+// Build compiles a JVM class or class hierarchy into a single static binary.
 func Build(opts BuildOptions) (*BuildResult, error) {
 	start := time.Now()
 
-	if opts.ClassFile == nil {
-		return nil, errors.New("classfile cannot be nil")
+	hierarchy := opts.Hierarchy
+	if hierarchy == nil {
+		if opts.ClassFile == nil {
+			return nil, errors.New("classfile or hierarchy must be provided")
+		}
+		hierarchy = classfile.NewClassHierarchy()
+		hierarchy.Add(opts.ClassFile)
+		hierarchy.MainClass = opts.ClassFile.ThisClass
+	}
+	if len(hierarchy.Classes) == 0 {
+		return nil, errors.New("no classes to compile")
 	}
 
 	targetOS, targetArch, err := ParseTarget(opts.TargetOS)
@@ -64,9 +74,14 @@ func Build(opts BuildOptions) (*BuildResult, error) {
 		return nil, err
 	}
 
+	primaryClass := selectPrimaryClass(hierarchy, opts.Entrypoint)
+	if primaryClass == nil {
+		return nil, errors.New("no classes to compile")
+	}
+
 	outPath := opts.OutputPath
 	if outPath == "" {
-		outPath = strings.ToLower(codegen.CleanClassName(opts.ClassFile.ThisClass))
+		outPath = strings.ToLower(codegen.CleanClassName(primaryClass.ThisClass))
 	}
 	if targetOS == "windows" && !strings.HasSuffix(strings.ToLower(outPath), ".exe") {
 		outPath += ".exe"
@@ -80,34 +95,16 @@ func Build(opts BuildOptions) (*BuildResult, error) {
 	}
 
 	if opts.OnProgress != nil {
-		opts.OnProgress(1, 4, "Grinding bytecode and constant pool...")
+		opts.OnProgress(1, 4, fmt.Sprintf("Grinding %d classes and constant pools...", len(hierarchy.Classes)))
 	}
 
-	loweredMethods := opts.Methods
-	if len(loweredMethods) == 0 {
-		for _, m := range opts.ClassFile.Methods {
-			code := m.FindCode()
-			if code == nil {
-				continue
-			}
-			mir, err := ir.LowerMethodWithExceptions(
-				opts.ClassFile.ConstantPool,
-				opts.ClassFile.ThisClass,
-				m.Name,
-				m.Descriptor,
-				code.Code,
-				m.IsStatic(),
-				code.ExceptionTable,
-			)
-			if err != nil {
-				return nil, fmt.Errorf("failed compiling method %s: %w", m.Name, err)
-			}
-			loweredMethods = append(loweredMethods, mir)
-		}
+	modules, err := lowerHierarchy(hierarchy)
+	if err != nil {
+		return nil, err
 	}
 
 	if opts.OnProgress != nil {
-		opts.OnProgress(2, 4, "Brewing SSA IR and control flow graph...")
+		opts.OnProgress(2, 4, "Brewing SSA IR and cross-class call graph...")
 	}
 
 	workDir, err := os.MkdirTemp("", "barista-build-*")
@@ -141,20 +138,33 @@ replace github.com/JohnEsleyer/barista => ./barista_runtime
 		return nil, fmt.Errorf("create app package dir: %w", err)
 	}
 
-	goSrc, err := codegen.GenerateGoWithPackage(opts.ClassFile, loweredMethods, "app")
+	generatedFiles, err := codegen.GenerateModule(modules, "app")
 	if err != nil {
-		return nil, fmt.Errorf("generate Go source: %w", err)
+		return nil, fmt.Errorf("generate Go module: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(appDir, "class.go"), goSrc, 0644); err != nil {
-		return nil, fmt.Errorf("write app class.go: %w", err)
+	for name, content := range generatedFiles {
+		if err := os.WriteFile(filepath.Join(appDir, name), content, 0644); err != nil {
+			return nil, fmt.Errorf("write app/%s: %w", name, err)
+		}
 	}
 
-	entry, err := findEntrypoint(opts.ClassFile, loweredMethods, opts.Entrypoint)
-	if err != nil {
-		return nil, err
+	methodsByClass := make(map[string][]*ir.MethodIR, len(modules))
+	for _, mod := range modules {
+		methodsByClass[mod.ClassFile.ThisClass] = mod.Methods
 	}
 
-	mainSrc := generateMainGo(entry)
+	springControllers := codegen.DetectSpringControllers(hierarchy, methodsByClass)
+	var mainSrc []byte
+	if len(springControllers) > 0 {
+		mainSrc = codegen.GenerateSpringMainGo(springControllers)
+	} else {
+		entry, err := findEntrypointInHierarchy(hierarchy, modules, opts.Entrypoint)
+		if err != nil {
+			return nil, err
+		}
+		mainSrc = generateMainGo(entry)
+	}
+
 	if err := os.WriteFile(filepath.Join(workDir, "main.go"), mainSrc, 0644); err != nil {
 		return nil, fmt.Errorf("write main.go: %w", err)
 	}
@@ -189,8 +199,66 @@ replace github.com/JohnEsleyer/barista => ./barista_runtime
 		Duration:   time.Since(start),
 		TargetOS:   targetOS,
 		TargetArch: targetArch,
-		Class:      opts.ClassFile.ThisClass,
+		Class:      primaryClass.ThisClass,
 	}, nil
+}
+
+func lowerHierarchy(hierarchy *classfile.ClassHierarchy) ([]codegen.ClassModule, error) {
+	modules := make([]codegen.ClassModule, 0, len(hierarchy.Classes))
+	for _, name := range hierarchy.Names() {
+		cf := hierarchy.Classes[name]
+		methods := make([]*ir.MethodIR, 0, len(cf.Methods))
+		for _, m := range cf.Methods {
+			code := m.FindCode()
+			if code == nil {
+				continue
+			}
+			mir, err := ir.LowerMethodWithExceptions(
+				cf.ConstantPool,
+				cf.ThisClass,
+				m.Name,
+				m.Descriptor,
+				code.Code,
+				m.IsStatic(),
+				code.ExceptionTable,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("failed compiling method %s.%s: %w", cf.ThisClass, m.Name, err)
+			}
+			methods = append(methods, mir)
+		}
+		modules = append(modules, codegen.ClassModule{ClassFile: cf, Methods: methods})
+	}
+	return modules, nil
+}
+
+func selectPrimaryClass(hierarchy *classfile.ClassHierarchy, customEntry string) *classfile.ClassFile {
+	if cf := hierarchy.Get(hierarchy.MainClass); cf != nil {
+		return cf
+	}
+	names := hierarchy.Names()
+	if customEntry != "" {
+		for _, name := range names {
+			cf := hierarchy.Classes[name]
+			for _, m := range cf.Methods {
+				if strings.EqualFold(m.Name, customEntry) || strings.EqualFold(codegen.CleanMemberName(m.Name), customEntry) {
+					return cf
+				}
+			}
+		}
+	}
+	for _, name := range names {
+		cf := hierarchy.Classes[name]
+		for _, m := range cf.Methods {
+			if m.Name == "main" {
+				return cf
+			}
+		}
+	}
+	if len(names) > 0 {
+		return hierarchy.Classes[names[0]]
+	}
+	return nil
 }
 
 // Serve compiles the class file in memory and executes it immediately.
@@ -239,91 +307,95 @@ type entrypoint struct {
 	className  string
 }
 
-func findEntrypoint(cf *classfile.ClassFile, methods []*ir.MethodIR, custom string) (*entrypoint, error) {
-	methodNames := codegen.ResolveMethodNames(cf.ThisClass, methods)
+func findEntrypointInHierarchy(hierarchy *classfile.ClassHierarchy, modules []codegen.ClassModule, custom string) (*entrypoint, error) {
+	methodNames := codegen.ResolveModuleMethodNames(modules)
+	classes := hierarchyClassOrder(hierarchy)
 
 	if custom != "" {
-		for _, m := range cf.Methods {
-			if strings.EqualFold(m.Name, custom) || strings.EqualFold(codegen.CleanMemberName(m.Name), custom) {
-				key := codegen.MethodKey(cf.ThisClass, m.Name, m.Descriptor)
-				goName := methodNames[key]
-				if goName == "" {
-					goName = codegen.CleanMemberName(m.Name)
+		for _, cf := range classes {
+			for i := range cf.Methods {
+				m := &cf.Methods[i]
+				if strings.EqualFold(m.Name, custom) || strings.EqualFold(codegen.CleanMemberName(m.Name), custom) {
+					return makeEntrypoint(cf, m, methodNames), nil
 				}
-				md, _ := ir.ParseMethodDescriptor(m.Descriptor)
-				hasArgs := len(md.Params) > 0 && strings.HasPrefix(md.Params[0], "[")
-				returnsInt := md.Return == "I" || md.Return == "Z"
-				return &entrypoint{
-					goName:     goName,
-					isStatic:   m.IsStatic(),
-					hasArgs:    hasArgs,
-					returnsInt: returnsInt,
-					className:  codegen.CleanClassName(cf.ThisClass),
-				}, nil
 			}
 		}
-		return nil, fmt.Errorf("custom entrypoint %q not found in class %s", custom, cf.ThisClass)
+		return nil, fmt.Errorf("custom entrypoint %q not found in module", custom)
 	}
 
 	// Priority 1: main([Ljava/lang/String;)V or ([Ljava/lang/String;)I
-	for _, m := range cf.Methods {
-		if m.Name == "main" && (m.Descriptor == "([Ljava/lang/String;)V" || m.Descriptor == "([Ljava/lang/String;)I") {
-			key := codegen.MethodKey(cf.ThisClass, m.Name, m.Descriptor)
-			return &entrypoint{
-				goName:     methodNames[key],
-				isStatic:   m.IsStatic(),
-				hasArgs:    true,
-				returnsInt: strings.HasSuffix(m.Descriptor, ")I"),
-				className:  codegen.CleanClassName(cf.ThisClass),
-			}, nil
+	for _, cf := range classes {
+		for i := range cf.Methods {
+			m := &cf.Methods[i]
+			if m.Name == "main" && (m.Descriptor == "([Ljava/lang/String;)V" || m.Descriptor == "([Ljava/lang/String;)I") {
+				return makeEntrypoint(cf, m, methodNames), nil
+			}
 		}
 	}
 
 	// Priority 2: main()V or main()I
-	for _, m := range cf.Methods {
-		if m.Name == "main" && (m.Descriptor == "()V" || m.Descriptor == "()I") {
-			key := codegen.MethodKey(cf.ThisClass, m.Name, m.Descriptor)
-			return &entrypoint{
-				goName:     methodNames[key],
-				isStatic:   m.IsStatic(),
-				hasArgs:    false,
-				returnsInt: strings.HasSuffix(m.Descriptor, ")I"),
-				className:  codegen.CleanClassName(cf.ThisClass),
-			}, nil
+	for _, cf := range classes {
+		for i := range cf.Methods {
+			m := &cf.Methods[i]
+			if m.Name == "main" && (m.Descriptor == "()V" || m.Descriptor == "()I") {
+				return makeEntrypoint(cf, m, methodNames), nil
+			}
 		}
 	}
 
 	// Priority 3: any other method named "main"
-	for _, m := range cf.Methods {
-		if m.Name == "main" {
-			key := codegen.MethodKey(cf.ThisClass, m.Name, m.Descriptor)
-			md, _ := ir.ParseMethodDescriptor(m.Descriptor)
-			hasArgs := len(md.Params) > 0 && strings.HasPrefix(md.Params[0], "[")
-			return &entrypoint{
-				goName:     methodNames[key],
-				isStatic:   m.IsStatic(),
-				hasArgs:    hasArgs,
-				returnsInt: md.Return == "I" || md.Return == "Z",
-				className:  codegen.CleanClassName(cf.ThisClass),
-			}, nil
+	for _, cf := range classes {
+		for i := range cf.Methods {
+			m := &cf.Methods[i]
+			if m.Name == "main" {
+				return makeEntrypoint(cf, m, methodNames), nil
+			}
 		}
 	}
 
 	// Priority 4: parameterless run or start method
-	for _, m := range cf.Methods {
-		if (m.Name == "run" || m.Name == "start" || m.Name == "Run" || m.Name == "Start") && (m.Descriptor == "()V" || m.Descriptor == "()I") {
-			key := codegen.MethodKey(cf.ThisClass, m.Name, m.Descriptor)
-			return &entrypoint{
-				goName:     methodNames[key],
-				isStatic:   m.IsStatic(),
-				hasArgs:    false,
-				returnsInt: strings.HasSuffix(m.Descriptor, ")I"),
-				className:  codegen.CleanClassName(cf.ThisClass),
-			}, nil
+	for _, cf := range classes {
+		for i := range cf.Methods {
+			m := &cf.Methods[i]
+			if (m.Name == "run" || m.Name == "start" || m.Name == "Run" || m.Name == "Start") && (m.Descriptor == "()V" || m.Descriptor == "()I") {
+				return makeEntrypoint(cf, m, methodNames), nil
+			}
 		}
 	}
 
-	return nil, fmt.Errorf("class %s does not declare a 'public static void main' entrypoint (use -entry to specify a custom method)", cf.ThisClass)
+	return nil, fmt.Errorf("module does not declare a 'public static void main' entrypoint (use -entry to specify a custom method)")
+}
+
+func hierarchyClassOrder(hierarchy *classfile.ClassHierarchy) []*classfile.ClassFile {
+	seen := make(map[string]bool)
+	classes := make([]*classfile.ClassFile, 0, len(hierarchy.Classes))
+	if cf := hierarchy.Get(hierarchy.MainClass); cf != nil {
+		classes = append(classes, cf)
+		seen[cf.ThisClass] = true
+	}
+	for _, name := range hierarchy.Names() {
+		if !seen[name] {
+			classes = append(classes, hierarchy.Classes[name])
+		}
+	}
+	return classes
+}
+
+func makeEntrypoint(cf *classfile.ClassFile, m *classfile.MemberInfo, methodNames map[string]string) *entrypoint {
+	md, _ := ir.ParseMethodDescriptor(m.Descriptor)
+	goName := methodNames[codegen.MethodKey(cf.ThisClass, m.Name, m.Descriptor)]
+	if goName == "" {
+		goName = codegen.CleanMemberName(m.Name)
+	}
+	hasArgs := len(md.Params) > 0 && strings.HasPrefix(md.Params[0], "[")
+	returnsInt := md.Return == "I" || md.Return == "Z"
+	return &entrypoint{
+		goName:     goName,
+		isStatic:   m.IsStatic(),
+		hasArgs:    hasArgs,
+		returnsInt: returnsInt,
+		className:  codegen.CleanClassName(cf.ThisClass),
+	}
 }
 
 func generateMainGo(entry *entrypoint) []byte {
