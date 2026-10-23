@@ -373,6 +373,20 @@ barista/
 
 ## Getting Started
 
+### Installation
+
+Install via the one-line installer:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/JohnEsleyer/barista/main/install.sh | bash
+```
+
+Or from a cloned repository:
+
+```sh
+./install.sh
+```
+
 ### Prerequisites
 
 - Go 1.24 or newer
