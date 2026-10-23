@@ -1,0 +1,53 @@
+# --- Go build artefacts -------------------------------------------------------
+/bin/
+/dist/
+/out/
+/barista
+/barista.exe
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.prof
+*.coverprofile
+coverage.out
+coverage.html
+
+# Go workspace files (developer-specific)
+go.work
+go.work.sum
+
+# --- Textify -----------------------------------------------------------------
+codebase.txt
+textify.yaml.bak
+
+# --- Local test output -------------------------------------------------------
+tests/tmp/
+tests/fixtures/out/
+
+# --- Environment and secrets -------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# --- Editors and IDEs --------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# --- OS files ----------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Logs and temporary files ------------------------------------------------
+*.log
+tmp/
