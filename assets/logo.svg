@@ -1,0 +1,181 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradients -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0F172A"/>
+      <stop offset="50%" stop-color="#0A0F1D"/>
+      <stop offset="100%" stop-color="#05070D"/>
+    </linearGradient>
+
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F5FF" stop-opacity="0.6"/>
+      <stop offset="50%" stop-color="#0077FE" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#00F5FF" stop-opacity="0.4"/>
+    </linearGradient>
+
+    <radialGradient id="coreGlow" cx="50%" cy="45%" r="45%">
+      <stop offset="0%" stop-color="#0077FE" stop-opacity="0.35"/>
+      <stop offset="60%" stop-color="#00F5FF" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Steam Gradients -->
+    <linearGradient id="steamGrad1" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#0077FE" stop-opacity="0.1"/>
+      <stop offset="40%" stop-color="#00D2FF" stop-opacity="0.85"/>
+      <stop offset="80%" stop-color="#00FFF0" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.4"/>
+    </linearGradient>
+
+    <linearGradient id="steamGrad2" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#0052D4" stop-opacity="0.1"/>
+      <stop offset="50%" stop-color="#00C6FF" stop-opacity="0.8"/>
+      <stop offset="90%" stop-color="#00F5FF" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#E0FFFF" stop-opacity="0.3"/>
+    </linearGradient>
+
+    <!-- Cup & Ceramic Gradients -->
+    <linearGradient id="cupGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="40%" stop-color="#E2E8F0"/>
+      <stop offset="80%" stop-color="#CBD5E1"/>
+      <stop offset="100%" stop-color="#94A3B8"/>
+    </linearGradient>
+
+    <linearGradient id="cupInnerGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1E293B"/>
+      <stop offset="100%" stop-color="#0F172A"/>
+    </linearGradient>
+
+    <linearGradient id="coffeeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#D97706"/>
+      <stop offset="35%" stop-color="#92400E"/>
+      <stop offset="70%" stop-color="#451A03"/>
+      <stop offset="100%" stop-color="#1C0A00"/>
+    </linearGradient>
+
+    <linearGradient id="cremaGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#F59E0B" stop-opacity="0.9"/>
+      <stop offset="50%" stop-color="#FDE68A" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#B45309" stop-opacity="0.8"/>
+    </linearGradient>
+
+    <linearGradient id="saucerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#64748B"/>
+      <stop offset="25%" stop-color="#E2E8F0"/>
+      <stop offset="50%" stop-color="#FFFFFF"/>
+      <stop offset="75%" stop-color="#CBD5E1"/>
+      <stop offset="100%" stop-color="#475569"/>
+    </linearGradient>
+
+    <linearGradient id="lightningGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F5FF"/>
+      <stop offset="100%" stop-color="#0066FF"/>
+    </linearGradient>
+
+    <!-- Filters -->
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+
+    <filter id="saucerShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="16" stdDeviation="14" flood-color="#000000" flood-opacity="0.6"/>
+    </filter>
+
+    <filter id="cupShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#000000" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+
+  <!-- Base App Tile -->
+  <rect x="16" y="16" width="480" height="480" rx="108" fill="url(#bgGrad)"/>
+  <rect x="16" y="16" width="480" height="480" rx="108" fill="none" stroke="url(#borderGrad)" stroke-width="2.5"/>
+
+  <!-- Background Ambient Glow -->
+  <circle cx="256" cy="240" r="210" fill="url(#coreGlow)"/>
+
+  <!-- ==================== STEAM / AOT COMPILATION WAVES ==================== -->
+  <g filter="url(#softGlow)">
+    <!-- Left Steam Plume -->
+    <path d="M 210,210 C 190,175 195,145 215,120 C 235,95 230,70 215,45"
+          fill="none" stroke="url(#steamGrad2)" stroke-width="9" stroke-linecap="round"/>
+
+    <!-- Center Main Steam / Turbo Wave -->
+    <path d="M 256,200 C 235,160 240,120 270,90 C 295,65 285,40 265,22"
+          fill="none" stroke="url(#steamGrad1)" stroke-width="12" stroke-linecap="round"/>
+
+    <!-- Right Steam Plume -->
+    <path d="M 302,210 C 322,175 315,145 295,120 C 278,98 285,72 300,48"
+          fill="none" stroke="url(#steamGrad2)" stroke-width="9" stroke-linecap="round"/>
+
+    <!-- Speed / Code Spark Accents -->
+    <circle cx="282" cy="55" r="3" fill="#00FFF0"/>
+    <circle cx="205" cy="78" r="2.5" fill="#00D2FF"/>
+    <circle cx="230" cy="35" r="2.5" fill="#FFFFFF"/>
+  </g>
+
+  <!-- ==================== SAUCER ==================== -->
+  <g filter="url(#saucerShadow)">
+    <!-- Saucer Rim -->
+    <ellipse cx="256" cy="406" rx="172" ry="24" fill="url(#saucerGrad)"/>
+    <!-- Saucer Inner Well -->
+    <ellipse cx="256" cy="404" rx="128" ry="15" fill="#0F172A" opacity="0.25"/>
+    <ellipse cx="256" cy="403" rx="124" ry="13" fill="#1E293B" opacity="0.3"/>
+  </g>
+
+  <!-- ==================== CUP HANDLE ==================== -->
+  <g filter="url(#cupShadow)">
+    <!-- Outer Handle Loop -->
+    <path d="M 320,265 C 388,265 412,305 408,340 C 404,375 365,392 316,386"
+          fill="none" stroke="url(#cupGrad)" stroke-width="26" stroke-linecap="round"/>
+    <!-- Inner Handle Negative Space -->
+    <path d="M 324,283 C 368,283 384,308 382,336 C 380,360 355,372 322,368"
+          fill="none" stroke="#0B0F1A" stroke-width="12" stroke-linecap="round"/>
+  </g>
+
+  <!-- ==================== CUP BODY ==================== -->
+  <g filter="url(#cupShadow)">
+    <!-- Cup Outer Silhouette -->
+    <path d="M 148,245 
+             C 152,328 178,396 256,396 
+             C 334,396 360,328 364,245 
+             Z" 
+          fill="url(#cupGrad)"/>
+
+    <!-- Cup Left Specular Highlight -->
+    <path d="M 164,258 
+             C 168,322 188,375 240,386 
+             C 210,375 186,328 182,260 
+             Z" 
+          fill="#FFFFFF" opacity="0.45"/>
+
+    <!-- Cup Rim Outer Lip -->
+    <ellipse cx="256" cy="245" rx="108" ry="24" fill="url(#cupGrad)"/>
+    <!-- Cup Rim Inner Wall -->
+    <ellipse cx="256" cy="245" rx="98" ry="20" fill="url(#cupInnerGrad)"/>
+
+    <!-- Espresso Liquid Surface -->
+    <ellipse cx="256" cy="248" rx="92" ry="17" fill="url(#coffeeGrad)"/>
+
+    <!-- Crema Swirl Wave (Binary S-Curve) -->
+    <path d="M 188,249 
+             C 214,240 236,258 266,248 
+             C 292,239 316,252 324,248
+             C 304,258 276,252 250,256
+             C 220,260 198,254 188,249 Z" 
+          fill="url(#cremaGrad)"/>
+
+    <!-- Espresso Surface Center Highlight -->
+    <ellipse cx="236" cy="246" rx="20" ry="4" fill="#FEF3C7" opacity="0.6"/>
+  </g>
+
+  <!-- ==================== BARISTA EMBLEM (SPEED / LIGHTNING BOLT) ==================== -->
+  <g transform="translate(0, 0)">
+    <!-- Cyan Energy Glyph on Cup Front -->
+    <path d="M 264,288 L 242,324 L 255,324 L 244,358 L 274,318 L 259,318 Z" 
+          fill="url(#lightningGrad)" filter="url(#softGlow)"/>
+    <path d="M 264,288 L 242,324 L 255,324 L 244,358 L 274,318 L 259,318 Z" 
+          fill="#FFFFFF" opacity="0.75"/>
+  </g>
+</svg>

@@ -1,3 +1,9 @@
+<p align="center">
+  <picture>
+    <img src="assets/logo.svg" alt="Barista Logo" width="160" height="160">
+  </picture>
+</p>
+
 # Barista
 
 > **Love writing Java or Kotlin? Deploy like Go.**
@@ -146,6 +152,8 @@ The generated program does not ship `rt.jar`. Critical-path JDK and Kotlin APIs 
 
 ```text
 barista/
+├── assets/
+│   └── logo.svg                    # Vector brand logo
 ├── cmd/
 │   └── barista/
 │       └── main.go                 # CLI entrypoint: grind, brew, serve
