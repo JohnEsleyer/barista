@@ -121,6 +121,32 @@ func (cp ConstantPool) ResolveMemberRef(index uint16) (className, name, descript
 	return className, name, descriptor, err
 }
 
+// ResolveFieldRef resolves the owning class name, field name, and descriptor.
+func (cp ConstantPool) ResolveFieldRef(index uint16) (string, string, string, error) {
+	entry, err := cp.entry(index)
+	if err != nil {
+		return "", "", "", err
+	}
+	ref, ok := entry.(*ConstantRef)
+	if !ok || ref.Tag() != TagFieldref {
+		return "", "", "", fmt.Errorf("constant pool entry at %d is not CONSTANT_Fieldref", index)
+	}
+	return cp.ResolveMemberRef(index)
+}
+
+// ResolveMethodRef resolves the owning class name, method name, and descriptor.
+func (cp ConstantPool) ResolveMethodRef(index uint16) (string, string, string, error) {
+	entry, err := cp.entry(index)
+	if err != nil {
+		return "", "", "", err
+	}
+	ref, ok := entry.(*ConstantRef)
+	if !ok || (ref.Tag() != TagMethodref && ref.Tag() != TagInterfaceMethodref) {
+		return "", "", "", fmt.Errorf("constant pool entry at %d is not a method reference", index)
+	}
+	return cp.ResolveMemberRef(index)
+}
+
 // Concrete constant pool entries.
 
 type ConstantUtf8 struct{ Value string }

@@ -95,11 +95,7 @@ func runGrind(args []string, stdout io.Writer) error {
 		if code == nil {
 			continue
 		}
-		if !m.IsStatic() || strings.HasPrefix(m.Name, "<") {
-			fmt.Fprintf(stdout, "Method %s%s: [skipped: instance methods and initializers are Phase 2]\n\n", m.Name, m.Descriptor)
-			continue
-		}
-		mir, err := ir.LowerBytecodeWithPool(m.Name, m.Descriptor, code.Code, m.IsStatic(), cf.ConstantPool)
+		mir, err := ir.LowerMethod(cf.ConstantPool, cf.ThisClass, m.Name, m.Descriptor, code.Code, m.IsStatic())
 		if err != nil {
 			fmt.Fprintf(stdout, "Method %s%s: [Lowering Error: %v]\n\n", m.Name, m.Descriptor, err)
 			continue
@@ -107,6 +103,20 @@ func runGrind(args []string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "Method %s%s:\n", m.Name, m.Descriptor)
 		for _, inst := range mir.Instructions {
 			fmt.Fprintf(stdout, "    %s\n", inst)
+		}
+		if mir.CFG != nil {
+			fmt.Fprintf(stdout, "    CFG: %d blocks, entry %s\n", len(mir.CFG.Blocks), mir.CFG.Entry.Label())
+			for _, block := range mir.CFG.Blocks {
+				fmt.Fprintf(stdout, "        %s [pc %d..%d)", block.Label(), block.StartPC, block.EndPC)
+				if len(block.Successors) > 0 {
+					successors := make([]string, 0, len(block.Successors))
+					for _, successor := range block.Successors {
+						successors = append(successors, successor.Label())
+					}
+					fmt.Fprintf(stdout, " -> %s", strings.Join(successors, ", "))
+				}
+				fmt.Fprintln(stdout)
+			}
 		}
 		fmt.Fprintln(stdout)
 	}
@@ -141,10 +151,7 @@ func runBrew(args []string, stdout io.Writer) error {
 		if code == nil {
 			continue
 		}
-		if !m.IsStatic() || strings.HasPrefix(m.Name, "<") {
-			continue
-		}
-		mir, err := ir.LowerBytecodeWithPool(m.Name, m.Descriptor, code.Code, m.IsStatic(), cf.ConstantPool)
+		mir, err := ir.LowerMethod(cf.ConstantPool, cf.ThisClass, m.Name, m.Descriptor, code.Code, m.IsStatic())
 		if err != nil {
 			return fmt.Errorf("failed compiling method %s: %w", m.Name, err)
 		}

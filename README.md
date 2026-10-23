@@ -8,7 +8,7 @@
 
 You keep the language and toolchain you already love. You leave behind the JVM's operational baggage: no 200MB base runtime, no JIT warm-up spikes, no JRE packaging, and no guessing whether your app will fit on a $4/month box. Write Java or Kotlin; ship one native binary.
 
-> **Status:** Phase 1 is implemented. Barista can parse class files, lower static integer methods (including branches and loops) into de-stacked IR, and emit runnable Go source. Objects, strings, arrays, exceptions, and Kotlin runtime shims are next; see the [roadmap](#roadmap).
+> **Status:** Phase 2 is implemented. Barista can parse class files, lower static and instance integer methods (including branches, loops, objects, fields, constructors, and same-class dispatch) into de-stacked IR, build a control flow graph, and emit runnable Go source. Strings, arrays, exceptions, cross-class dispatch, and Kotlin runtime shims are next; see the [roadmap](#roadmap).
 >
 > **Detailed progress:** [`docs/progress.md`](docs/progress.md) is the canonical tracker for completed capabilities, known limitations, test status, and the next task.
 
@@ -151,10 +151,13 @@ barista/
 │   │   └── class_test.go           # Decoder unit tests
 │   ├── ir/                         # Intermediate representation
 │   │   ├── instruction.go          # Normalised SSA-style instructions
+│   │   ├── block.go                # Basic blocks and control flow graph
+│   │   ├── descriptor.go           # JVM method descriptor parsing
 │   │   ├── stack_eval.go           # Operand-stack evaluator and branch lowering
-│   │   └── stack_eval_test.go      # IR unit tests
+│   │   └── stack_eval_test.go      # IR and CFG unit tests
 │   ├── codegen/                    # Go transpilation
-│   │   └── generator.go            # IR to Go AST, formatting via go/format
+│   │   ├── generator.go            # IR to Go AST, formatting via go/format
+│   │   └── type_map.go             # JVM descriptors to Go types and names
 │   └── builder/                    # Toolchain execution (Phase 6)
 ├── pkg/
 │   └── runtime/                    # Embedded shims baked into generated output
@@ -213,7 +216,7 @@ The CLI exposes three commands, following the coffee theme:
 | Command | Purpose | Status |
 | --- | --- | --- |
 | `barista grind <input.class>` | Disassemble a class file into a readable IR dump | implemented |
-| `barista brew [-o output.go] <input.class>` | Run the Phase 1 pipeline and emit Go source | implemented |
+| `barista brew [-o output.go] <input.class>` | Run the Phase 2 pipeline and emit Go source | implemented |
 | `barista serve <input>` | Compile in memory and execute immediately | planned |
 
 ```sh
@@ -225,7 +228,7 @@ javac -d tests/fixtures/out tests/fixtures/java/Calculator.java
 ./bin/barista brew -o out/calculator.go tests/fixtures/out/Calculator.class
 ```
 
-Phase 1 covers static methods using `int` arithmetic, conditionals, and loops. Instance methods, constructors, objects, strings, arrays, and exceptions are skipped or rejected with a diagnostic until their phases land.
+Phase 2 covers static and instance methods using `int` arithmetic, conditionals, loops, objects, instance and static fields, constructors, and same-class dispatch. Strings, arrays, exceptions, inheritance, cross-class dispatch, and Kotlin runtime behaviour are skipped or rejected with a diagnostic until their phases land.
 
 ---
 
@@ -244,7 +247,7 @@ Kotlin compiles to standard JVM bytecode, so the parser needs no Kotlin-specific
 | Phase | Goal | Key work | Status |
 | --- | --- | --- | --- |
 | 1 | Primitive calculator | Class-file parsing, constant pool, core integer opcodes, branch/loop lowering, `go/ast` output, `grind`/`brew` | done |
-| 2 | Objects & control flow | `new`, `dup`, field access, constructors, object model, basic-block partitioning | planned |
+| 2 | Objects & control flow | `new`, `dup`, field access, constructors, object model, basic-block partitioning | done |
 | 3 | Runtime & exceptions | Exception tables, `String`/`StringBuilder`, arrays | planned |
 | 4 | Kotlin engine | Switch bytecodes, stdlib intrinsics, data classes, singletons | planned |
 | 5 | Networking | `net/http`-backed server pipelines, socket interception | planned |
@@ -252,11 +255,11 @@ Kotlin compiles to standard JVM bytecode, so the parser needs no Kotlin-specific
 
 ### Immediate next steps
 
-1. Add class instantiation and field access: `new`, `dup`, `getfield`, `putfield`, `invokespecial` (constructors).
-2. Introduce the generated object model with pointer receivers and Go-native allocation.
-3. Replace linear `goto` lowering with explicit basic blocks and structured control flow where possible.
-4. Parse and emit exception tables into `panic`/`recover` handlers.
-5. Extend the fixture suite with objects and exception-handling programs.
+1. Add array allocation and access: `newarray`, `anewarray`, `iaload`, `iastore`, and related opcodes.
+2. Replace the generated `JavaLangString` placeholder with a real runtime-backed String wrapper.
+3. Parse and emit exception tables into `panic`/`recover` handlers.
+4. Extend the fixture suite with arrays, strings, and exception-handling programs.
+5. Add cross-class dispatch and inheritance support after the single-class object model is stable.
 
 ---
 

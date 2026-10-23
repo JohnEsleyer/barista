@@ -18,6 +18,16 @@ const (
 	OpGoto
 	OpBranch
 	OpReturn
+
+	// Phase 2: objects, fields, and member dispatch.
+	OpNew
+	OpGetField
+	OpPutField
+	OpGetStatic
+	OpPutStatic
+	OpInvokeVirtual
+	OpInvokeStatic
+	OpInvokeSpecial
 )
 
 func (k OpKind) String() string {
@@ -46,6 +56,22 @@ func (k OpKind) String() string {
 		return "BRANCH"
 	case OpReturn:
 		return "RETURN"
+	case OpNew:
+		return "NEW"
+	case OpGetField:
+		return "GET_FIELD"
+	case OpPutField:
+		return "PUT_FIELD"
+	case OpGetStatic:
+		return "GET_STATIC"
+	case OpPutStatic:
+		return "PUT_STATIC"
+	case OpInvokeVirtual:
+		return "INVOKE_VIRTUAL"
+	case OpInvokeStatic:
+		return "INVOKE_STATIC"
+	case OpInvokeSpecial:
+		return "INVOKE_SPECIAL"
 	default:
 		return fmt.Sprintf("UNKNOWN_OP(%d)", k)
 	}
@@ -82,10 +108,11 @@ func (c BranchCondition) String() string {
 	}
 }
 
-// Value represents a typed symbolic value in the SSA-style IR.
+// Value represents a typed symbolic value in the SSA-style IR. Type stores a
+// JVM descriptor such as "I" or "Lcom/example/User;".
 type Value struct {
 	ID   int
-	Type string // e.g. "int32"
+	Type string
 }
 
 func (v Value) String() string { return fmt.Sprintf("v%d", v.ID) }
@@ -100,6 +127,18 @@ type Instruction struct {
 	Label     int
 	Target    int
 	Condition BranchCondition
+
+	// PC is the bytecode offset of the JVM instruction that produced this IR
+	// instruction. Synthetic instructions (for example the load/add/store
+	// expansion of iinc) may share a PC.
+	PC int
+	// TargetPC is the absolute bytecode offset of a branch target.
+	TargetPC int
+
+	// Object/member metadata resolved from the constant pool.
+	OwnerClass string
+	MemberName string
+	Descriptor string
 }
 
 func (inst Instruction) String() string {
@@ -115,15 +154,18 @@ func (inst Instruction) String() string {
 	case OpNeg:
 		return fmt.Sprintf("%s = -%s", inst.Result, inst.Args[0])
 	case OpLabel:
+		if inst.PC != 0 {
+			return fmt.Sprintf("L%d: (pc %d)", inst.Label, inst.PC)
+		}
 		return fmt.Sprintf("L%d:", inst.Label)
 	case OpGoto:
-		return fmt.Sprintf("goto L%d", inst.Target)
+		return fmt.Sprintf("goto L%d (pc %d)", inst.Target, inst.TargetPC)
 	case OpBranch:
 		if len(inst.Args) == 1 {
-			return fmt.Sprintf("if %s %s 0 goto L%d", inst.Args[0], inst.Condition, inst.Target)
+			return fmt.Sprintf("if %s %s 0 goto L%d (pc %d)", inst.Args[0], inst.Condition, inst.Target, inst.TargetPC)
 		}
 		if len(inst.Args) == 2 {
-			return fmt.Sprintf("if %s %s %s goto L%d", inst.Args[0], inst.Condition, inst.Args[1], inst.Target)
+			return fmt.Sprintf("if %s %s %s goto L%d (pc %d)", inst.Args[0], inst.Condition, inst.Args[1], inst.Target, inst.TargetPC)
 		}
 		return fmt.Sprintf("if <invalid> goto L%d", inst.Target)
 	case OpReturn:
@@ -131,6 +173,29 @@ func (inst Instruction) String() string {
 			return fmt.Sprintf("return %s", inst.Args[0])
 		}
 		return "return"
+	case OpNew:
+		return fmt.Sprintf("%s = new %s", inst.Result, inst.OwnerClass)
+	case OpGetField:
+		return fmt.Sprintf("%s = %s.%s", inst.Result, inst.Args[0], inst.MemberName)
+	case OpPutField:
+		return fmt.Sprintf("%s.%s = %s", inst.Args[0], inst.MemberName, inst.Args[1])
+	case OpGetStatic:
+		return fmt.Sprintf("%s = %s::%s", inst.Result, inst.OwnerClass, inst.MemberName)
+	case OpPutStatic:
+		return fmt.Sprintf("%s::%s = %s", inst.OwnerClass, inst.MemberName, inst.Args[0])
+	case OpInvokeVirtual, OpInvokeStatic, OpInvokeSpecial:
+		recv := ""
+		if inst.Op != OpInvokeStatic && len(inst.Args) > 0 {
+			recv = inst.Args[0].String() + "."
+		}
+		callArgs := inst.Args
+		if inst.Op != OpInvokeStatic && len(callArgs) > 0 {
+			callArgs = callArgs[1:]
+		}
+		if inst.Result != nil {
+			return fmt.Sprintf("%s = %s%s%s(%v) [%s]", inst.Result, recv, inst.MemberName, inst.Descriptor, callArgs, inst.OwnerClass)
+		}
+		return fmt.Sprintf("%s%s%s(%v) [%s]", recv, inst.MemberName, inst.Descriptor, callArgs, inst.OwnerClass)
 	default:
 		return fmt.Sprintf("%s (?)", inst.Op)
 	}
@@ -153,9 +218,11 @@ func binarySymbol(op OpKind) string {
 
 // MethodIR holds the lowered SSA instructions for a method.
 type MethodIR struct {
+	OwnerClass   string
 	Name         string
 	Descriptor   string
 	Instructions []Instruction
+	CFG          *ControlFlowGraph
 	ParamCount   int
 	HasReturnVal bool
 	IsStatic     bool

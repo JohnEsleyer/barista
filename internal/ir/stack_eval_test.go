@@ -59,6 +59,55 @@ func TestLowerBytecodeConditional(t *testing.T) {
 	if !sawLabel || !sawBranch {
 		t.Fatalf("expected label and branch instructions, got %+v", mir.Instructions)
 	}
+
+	if mir.CFG == nil {
+		t.Fatal("expected a control flow graph")
+	}
+	if mir.CFG.Entry == nil || len(mir.CFG.Blocks) < 2 {
+		t.Fatalf("unexpected CFG: %+v", mir.CFG)
+	}
+	if block := mir.CFG.FindBlockByPC(5); block == nil {
+		t.Fatal("FindBlockByPC(5) returned nil")
+	}
+	if len(mir.CFG.Entry.Successors) != 2 {
+		t.Fatalf("entry has %d successors, want 2 (branch and fallthrough)", len(mir.CFG.Entry.Successors))
+	}
+	for _, block := range mir.CFG.Blocks {
+		for _, successor := range block.Successors {
+			found := false
+			for _, predecessor := range successor.Predecessors {
+				if predecessor == block {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("%s -> %s but reverse edge is missing", block.Label(), successor.Label())
+			}
+		}
+	}
+}
+
+func TestParseMethodDescriptor(t *testing.T) {
+	md, err := ir.ParseMethodDescriptor("(IJLjava/lang/String;[I)LCounter;")
+	if err != nil {
+		t.Fatalf("parse descriptor: %v", err)
+	}
+	wantParams := []string{"I", "J", "Ljava/lang/String;", "[I"}
+	if len(md.Params) != len(wantParams) {
+		t.Fatalf("got %d params, want %d", len(md.Params), len(wantParams))
+	}
+	for i, want := range wantParams {
+		if md.Params[i] != want {
+			t.Errorf("param %d = %q, want %q", i, md.Params[i], want)
+		}
+	}
+	if md.ParamSlots != 5 {
+		t.Errorf("ParamSlots = %d, want 5", md.ParamSlots)
+	}
+	if md.Return != "LCounter;" {
+		t.Errorf("Return = %q, want LCounter;", md.Return)
+	}
 }
 
 func TestLowerBytecodeLdc(t *testing.T) {
