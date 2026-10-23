@@ -4,11 +4,11 @@
 >
 > If you love writing Java or Kotlin, but you want to deploy apps that feel like Go programs — **sub-second builds, zero-effort cross-compilation, tiny 15MB RAM footprints, and smooth operation on $4/month VPS boxes** — Barista is built for you.
 
-**Barista** is an ahead-of-time (AOT) static de-stacking compiler for JVM bytecode, written in Go. It ingests standard `.class` files and `.jar` archives produced by `javac` or `kotlinc`, reconstructs their stack-based execution model as a register/variable-based IR, and emits idiomatic Go source that is compiled into a single, statically linked binary.
+**Barista** is an ahead-of-time (AOT) static de-stacking compiler for JVM bytecode, written in Go. It ingests standard `.class` files produced by `javac` or `kotlinc`, reconstructs their stack-based execution model as a register/variable-based IR, and emits idiomatic Go source that is compiled into a single, statically linked binary. `.jar` archive input is planned.
 
 You keep the language and toolchain you already love. You leave behind the JVM's operational baggage: no 200MB base runtime, no JIT warm-up spikes, no JRE packaging, and no guessing whether your app will fit on a $4/month box. Write Java or Kotlin; ship one native binary.
 
-> **Status:** Phase 4 core is implemented. Barista can parse class files, lower static and instance methods (including branches, loops, objects, fields, constructors, same-class dispatch, strings, arrays, caught exceptions, switches, Kotlin `Long` values, casts, and Kotlin intrinsics) into de-stacked IR, build a control flow graph, and emit runnable Go source. Kotlin `object` singletons, coroutines, cross-class dispatch, and PHI/stack merges are next; see the [roadmap](#roadmap).
+> **Status:** Phase 4 core is implemented. Barista can parse class files, lower static and instance methods (including branches, loops, PHI joins, objects, fields, constructors, same-class dispatch, strings, arrays, caught exceptions, switches, Kotlin `Long` values, casts, dynamic `Object` methods, and Kotlin intrinsics) into de-stacked IR, build a control flow graph, and emit runnable Go source. Kotlin `object` singletons, coroutines, and cross-class dispatch are deferred; see the [roadmap](#roadmap).
 >
 > **Detailed progress:** [`docs/progress.md`](docs/progress.md) is the canonical tracker for completed capabilities, known limitations, test status, and the next task.
 
@@ -128,7 +128,7 @@ Instances are always heap-allocated through pointers (`&ComExampleUser{}`), so o
 
 The generated program does not ship `rt.jar`. Critical-path JDK and Kotlin APIs are reimplemented in Go under `pkg/runtime`:
 
-- `java.lang.Object` — identity hash codes and default equality; `java.lang.Object` parameters map to Go `any`.
+- `java.lang.Object` — identity hash codes, default equality, and dynamic `equals`/`hashCode`/`toString` helpers; `java.lang.Object` parameters map to Go `any`.
 - `java.lang.String` — immutable wrapper over Go strings with length, equality, substring, concat, character access, and Java-compatible `hashCode`.
 - `java.lang.StringBuilder` — mutable string builder backed by `strings.Builder`, including `append(char)` for Kotlin interpolation.
 - `java.lang.Long` — boxed `Long`, static `hashCode(J)`, value equality, and string rendering.
@@ -237,7 +237,7 @@ javac -d tests/fixtures/out tests/fixtures/java/Calculator.java
 ./bin/barista brew -o out/calculator.go tests/fixtures/out/Calculator.class
 ```
 
-Phase 4 covers static and instance methods using `int`/`long` arithmetic, conditionals, loops, objects, instance and static fields, constructors, same-class dispatch, strings, arrays, `System.out`, caught runtime exceptions, dense/sparse switches, `checkcast`, `instanceof`, and Kotlin `Intrinsics`. Cross-class dispatch, inheritance, user-defined exception classes, Kotlin `object` singletons, coroutines, and PHI/stack merges are skipped or rejected with a diagnostic until their phases land.
+Phase 4 covers static and instance methods using `int`/`long` arithmetic, conditionals, loops, operand-stack PHI joins, objects, instance and static fields, constructors, same-class dispatch, strings, arrays, `System.out`, caught runtime exceptions, dense/sparse switches, `checkcast`, `instanceof`, dynamic `Object` methods, and Kotlin `Intrinsics`. Cross-class dispatch, inheritance, user-defined exception classes, Kotlin `object` singletons, and coroutines are skipped or rejected with a diagnostic until their phases land.
 
 ---
 
@@ -250,7 +250,8 @@ Kotlin compiles to standard JVM bytecode, so the parser needs no Kotlin-specific
 - **Default parameters:** `$default` bridges use ordinary `iand` + `ifeq` masks. No Kotlin-specific IR pass is required; `$` in method names is sanitised to `_` in Go.
 - **Switches:** `tableswitch` and `lookupswitch` are lowered to Go `switch` statements with `pc_<offset>` labels. This is also the foundation for coroutine state machines.
 - **Coroutines:** `tableswitch` / `lookupswitch` can represent Kotlin's continuation state machines. A later optimisation will detect `kotlin.coroutines.Continuation` parameters and dispatch the body as a goroutine over channels.
-- **Still planned:** `object` singletons, `Companion`, enums, `DefaultConstructorMarker`, property delegates, and the coroutine bridge.
+- **Still planned:** `object` singletons, `Companion`, enums, full `DefaultConstructorMarker` constructor semantics, property delegates, and the coroutine bridge.
+- **CI note:** the Kotlin integration test runs when `KOTLINC` or `kotlinc` is available and skips otherwise; pin a compiler in CI so it cannot skip silently.
 
 ---
 
@@ -261,17 +262,17 @@ Kotlin compiles to standard JVM bytecode, so the parser needs no Kotlin-specific
 | 1 | Primitive calculator | Class-file parsing, constant pool, core integer opcodes, branch/loop lowering, `go/ast` output, `grind`/`brew` | done |
 | 2 | Objects & control flow | `new`, `dup`, field access, constructors, object model, basic-block partitioning | done |
 | 3 | Runtime & exceptions | Exception tables, `String`/`StringBuilder`, arrays, `System.out`, runtime shims | done |
-| 4 | Kotlin engine | Switch bytecodes, Kotlin intrinsics, Longs, casts, default masks, data classes, coroutine state machines | core done; coroutines/objects next |
+| 4 | Kotlin engine | Switch bytecodes, Kotlin intrinsics, Longs, casts, PHI joins, default masks, data classes, coroutine state machines | core complete; objects/coroutines deferred |
 | 5 | Networking | `net/http`-backed server pipelines, socket interception | planned |
 | 6 | Production tooling | `serve`, stripped static binaries, packaging | planned |
 
 ### Immediate next steps
 
-1. Add PHI/edge-value support so branch targets can merge operand-stack values.
-2. Implement Kotlin `object` singletons, `Companion`, enums, and `DefaultConstructorMarker`.
-3. Add a coroutine fixture and the goroutine/channel bridge.
-4. Add cross-class dispatch and inheritance support so Kotlin stdlib calls can resolve beyond runtime shims.
-5. Expand casts/`instanceof` to model generated inheritance and interfaces.
+1. Implement Kotlin `object` singletons, `Companion`, enums, and full `DefaultConstructorMarker` constructor semantics.
+2. Add a coroutine fixture and the goroutine/channel bridge.
+3. Add cross-class dispatch and inheritance support so Kotlin stdlib calls can resolve beyond runtime shims.
+4. Expand casts/`instanceof` to model generated inheritance and interfaces.
+5. Start Phase 5 by mapping socket/HTTP entry points onto `net/http`.
 
 ---
 

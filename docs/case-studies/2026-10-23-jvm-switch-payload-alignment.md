@@ -63,7 +63,7 @@ target := opPC + int(offset)
 ## Verification
 
 - `TestLowerBytecodeTableSwitch` builds a hand-written `tableswitch` with two padding bytes and checks the default and case targets.
-- `TestSwitchPipeline` compiles `Switch.java` and runs both `tableswitch` and `lookupswitch` output.
+- `TestIntegrationSwitch` compiles `Switch.java` and runs both `tableswitch` and `lookupswitch` output.
 - Generated Go uses `pc_<offset>` labels and a Go `switch`.
 
 ## Guidance for Future Agents
@@ -77,4 +77,4 @@ target := opPC + int(offset)
 - `internal/ir/stack_eval.go` — `parseSwitch`, `decodeInstruction`
 - `internal/ir/stack_eval_test.go` — `TestLowerBytecodeTableSwitch`
 - `tests/fixtures/java/Switch.java`
-- `tests/integration_test.go` — `TestSwitchPipeline`
+- `tests/integration_test.go` — `TestIntegrationSwitch`

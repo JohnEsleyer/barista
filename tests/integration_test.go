@@ -81,7 +81,11 @@ replace github.com/JohnEsleyer/barista => %s
 	}
 
 	for name, content := range testFiles {
-		if err := os.WriteFile(filepath.Join(workDir, name), content, 0644); err != nil {
+		path := filepath.Join(workDir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatalf("create directory for %s: %v", name, err)
+		}
+		if err := os.WriteFile(path, content, 0644); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
@@ -344,7 +348,35 @@ func TestIntegrationKotlinGreeting(t *testing.T) {
 	userGo := brewClass(t, filepath.Join(outDir, "User.class"))
 	greetingGo := brewClass(t, filepath.Join(outDir, "GreetingKt.class"))
 
-	testCode := `package greetingkt
+	userTest := `package user
+
+import (
+	"testing"
+	"github.com/JohnEsleyer/barista/pkg/runtime/java/lang"
+)
+
+func TestKotlinUser(t *testing.T) {
+	name := lang.NewString("Barista")
+	user := &User{Id: 101, Name: name}
+	if user.GetId() != 101 {
+		t.Errorf("user.GetId() = %d, want 101", user.GetId())
+	}
+	if user.GetName().GoString() != "Barista" {
+		t.Errorf("user.GetName() = %q, want \"Barista\"", user.GetName().GoString())
+	}
+
+	user2 := &User{Id: 101, Name: name}
+	if !user.Equals(user2) {
+		t.Error("data class equals returned false for identical instances")
+	}
+}
+`
+	runGoTest(t, map[string][]byte{
+		"user/user.go":      userGo,
+		"user/user_test.go": []byte(userTest),
+	})
+
+	greetingTest := `package greetingkt
 
 import (
 	"testing"
@@ -358,30 +390,16 @@ func TestKotlinGreeting(t *testing.T) {
 		t.Errorf("Greet() = %q, want \"Hello, Barista!\"", got)
 	}
 
-	user := &User{Id: 101, Name: name}
-	if user.GetId() != 101 {
-		t.Errorf("user.GetId() = %d, want 101", user.GetId())
-	}
-	if user.GetName().GoString() != "Barista" {
-		t.Errorf("user.GetName() = %q, want \"Barista\"", user.GetName().GoString())
-	}
-
-	user2 := &User{Id: 101, Name: name}
-	if !user.Equals(user2) {
-		t.Error("data class equals returned false for identical instances")
-	}
-
-	fw := Farewell_overload(lang.NewString("Barista"), lang.NewString("?"), 0, nil)
-	if got := fw.GoString(); got != "Goodbye, Barista?" {
-		t.Errorf("Farewell() = %q, want \"Goodbye, Barista?\"", got)
+	fw := Farewell_default(lang.NewString("Barista"), nil, 2, nil)
+	if got := fw.GoString(); got != "Goodbye, Barista!" {
+		t.Errorf("Farewell_default() = %q, want \"Goodbye, Barista!\"", got)
 	}
 
 	Main()
 }
 `
 	runGoTest(t, map[string][]byte{
-		"user.go":          userGo,
-		"greetingkt.go":    greetingGo,
-		"greeting_test.go": []byte(testCode),
+		"greetingkt/greetingkt.go":    greetingGo,
+		"greetingkt/greeting_test.go": []byte(greetingTest),
 	})
 }

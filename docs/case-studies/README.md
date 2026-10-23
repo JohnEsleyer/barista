@@ -9,6 +9,8 @@ Each case study follows the naming convention, structure, and quality bar define
 | Date | Area | Title | Status |
 | --- | --- | --- | --- |
 | 2026-10-23 | ir/codegen | [Lowering JVM operand stack merges to branch-scoped phi assignments](2026-10-23-jvm-stack-merge-phi-lowering.md) | Resolved |
+| 2026-10-23 | ir | [JVM switch payloads are 4-byte aligned relative to the method start](2026-10-23-jvm-switch-payload-alignment.md) | Resolved |
+| 2026-10-23 | ir | [Kotlin default-parameter masks are ordinary bitwise branches](2026-10-23-kotlin-default-parameter-masks.md) | Resolved |
 | 2026-10-23 | codegen | [Go recover cannot resume at a JVM handler offset](2026-10-23-go-recover-handler-dispatch.md) | Resolved |
 | 2026-10-23 | ir | [JVM booleans use iload, so the result type cannot be hard-coded to int](2026-10-23-jvm-boolean-iload.md) | Resolved |
 | 2026-10-23 | codegen | [Go infers untyped integer literals as `int`](2026-10-23-go-untyped-integer-constants.md) | Resolved |

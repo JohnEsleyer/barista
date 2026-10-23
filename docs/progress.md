@@ -3,8 +3,8 @@
 This is the canonical tracker for Barista's implementation progress. Update it at the end of every meaningful change so a new contributor can understand what works, what does not, and what comes next without reading the entire commit history.
 
 **Last updated:** 2026-10-23
-**Current phase:** Phase 4 complete; Phase 5 next
-**Latest implementation commit:** `e872c01` — Implement Phase 4 Kotlin engine, switches, and operand stack merge phi lowering
+**Current phase:** Phase 4 core complete; Phase 5 next
+**Latest implementation commit:** `e383f40` — Implement Phase 4 Kotlin engine, switches, and operand stack merge phi lowering
 
 ---
 
@@ -23,6 +23,7 @@ This is the canonical tracker for Barista's implementation progress. Update it a
 | Runtime shims | `Object`, `String`, `StringBuilder`, `Throwable`, `System`, `Long`, `Intrinsics` | `pkg/runtime` |
 | CLI | `grind` and `brew` work for Phase 4 classes; `serve` is a stub | `cmd/barista` |
 | End-to-end fixtures | Calculator, Counter, Greeter, TryCatch, Switch, ReferenceOps, Greeting | `tests/integration_test.go` |
+| Kotlin integration | Conditional on `KOTLINC` or `kotlinc` on `PATH`; verified locally with Kotlin 2.1.10 | `TestIntegrationKotlinGreeting` |
 
 ---
 
@@ -72,7 +73,7 @@ This is the canonical tracker for Barista's implementation progress. Update it a
 - [x] Dynamic `java.lang.Object` virtual dispatch (`equals`, `hashCode`, `toString`)
 - [x] `kotlin.jvm.internal.Intrinsics` (`checkNotNullParameter`, `checkNotNull`, `areEqual`, `stringPlus`)
 - [x] `kotlin.io.ConsoleKt` (`println`, `print`)
-- [x] Kotlin data classes, default parameters, and `DefaultConstructorMarker`
+- [x] Kotlin data classes and default-parameter masks (`DefaultConstructorMarker` is mapped to `any`; full constructor bridges are deferred)
 - [x] Kotlin integration fixture (`Greeting.kt`)
 
 ### Phase 5 — Networking & I/O: Planned
@@ -85,3 +86,44 @@ This is the canonical tracker for Barista's implementation progress. Update it a
 - [ ] Invoke `go build -ldflags="-s -w"`
 - [ ] Static linking and cross-compilation workflow
 - [ ] Release packaging
+
+---
+
+## Deferred for Later Phases
+
+The Phase 4 core is complete, but these advanced cases remain out of scope and should not be assumed to work:
+
+- Cross-class dispatch, inheritance, interfaces, Kotlin stdlib classes outside the runtime shims, and `.jar` input.
+- Kotlin `object` singletons, `Companion`, enums, property delegates, and full `DefaultConstructorMarker` constructor semantics.
+- Coroutine continuation state machines and the goroutine/channel bridge.
+- Casts and `instanceof` against generated inheritance or interfaces; current helpers check concrete Go types.
+- `float`, `double`, `byte`, `char`, and `short` arithmetic, narrowing, array opcodes, and returns.
+- User-defined exception classes, `finally`, nested/overlapping traps, and returns or branches across protected ranges.
+- `wide`, `invokeinterface`, `invokedynamic`, `multianewarray`, and legacy `jsr`/`ret`.
+
+`docs/phase4-in-progress.md` keeps the longer list of deferred Kotlin engine work.
+
+---
+
+## Verification
+
+```sh
+go build ./...
+go vet ./...
+go test ./...
+go test -race ./...
+KOTLINC=/path/to/kotlinc go test ./tests -run TestIntegrationKotlinGreeting -count=1 -v
+```
+
+All commands pass on 2026-10-23. The Kotlin suite was verified locally with Kotlin 2.1.10; it skips when no compiler is available.
+
+---
+
+## Related Records
+
+- [AI agent conventions](conventions.md)
+- [Phase 4 follow-up notes](phase4-in-progress.md)
+- [Case study index](case-studies/README.md)
+- [Operand-stack merge/PHI case study](case-studies/2026-10-23-jvm-stack-merge-phi-lowering.md)
+- [JVM switch payload alignment case study](case-studies/2026-10-23-jvm-switch-payload-alignment.md)
+- [Kotlin default-parameter mask case study](case-studies/2026-10-23-kotlin-default-parameter-masks.md)

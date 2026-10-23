@@ -52,9 +52,9 @@ Kotlin encodes default arguments as a generated bridge with explicit bit tests. 
 
 ## Verification
 
-- `TestKotlinGreetingPipeline` checks `farewell$default` contains `OpAnd`.
-- The generated Go test calls `Farewell_default(lang.NewString("Barista"), nil, 2, nil)` and gets `"Goodbye, Barista!"`.
-- `KOTLINC=<compiler> go test ./tests -run TestKotlinGreetingPipeline` passes.
+- `TestLowerBytecodeStackMergePhi` covers operand-stack joins for `$default` masks and other branches.
+- `TestIntegrationKotlinGreeting` calls `Farewell_default(lang.NewString("Barista"), nil, 2, nil)` and gets `"Goodbye, Barista!"`.
+- `KOTLINC=<compiler> go test ./tests -run TestIntegrationKotlinGreeting` passes.
 
 ## Guidance for Future Agents
 
@@ -68,4 +68,4 @@ Kotlin encodes default arguments as a generated bridge with explicit bit tests. 
 - `internal/ir/stack_eval.go` — `iand` lowering
 - `internal/codegen/function.go` — method-name resolution and runtime calls
 - `pkg/runtime/kotlin/jvm/intrinsics.go`
-- `tests/integration_test.go` — `TestKotlinGreetingPipeline`
+- `tests/integration_test.go` — `TestIntegrationKotlinGreeting`
