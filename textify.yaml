@@ -25,6 +25,8 @@ dirs:
             - md
             - go
             - mod
+    bin:
+        enabled: false
     cmd:
         enabled: true
         extensions:

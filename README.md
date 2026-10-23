@@ -8,7 +8,7 @@
 
 You keep the language and toolchain you already love. You leave behind the JVM's operational baggage: no 200MB base runtime, no JIT warm-up spikes, no JRE packaging, and no guessing whether your app will fit on a $4/month box. Write Java or Kotlin; ship one native binary.
 
-> **Status:** early scaffold. The repository currently contains the project structure and CLI skeleton. The compiler pipeline is under active development; see the [roadmap](#roadmap).
+> **Status:** Phase 1 is implemented. Barista can parse class files, lower static integer methods (including branches and loops) into de-stacked IR, and emit runnable Go source. Objects, strings, arrays, exceptions, and Kotlin runtime shims are next; see the [roadmap](#roadmap).
 
 ---
 
@@ -139,23 +139,21 @@ The generated program does not ship `rt.jar`. Critical-path JDK and Kotlin APIs 
 barista/
 ├── cmd/
 │   └── barista/
-│       └── main.go                 # CLI entrypoint
+│       └── main.go                 # CLI entrypoint: grind, brew, serve
 ├── internal/
 │   ├── classfile/                  # Binary class-file decoding
-│   │   ├── class.go                # Class structure definitions
-│   │   ├── constant_pool.go        # Constant pool tags and symbolic tables
+│   │   ├── class.go                # Class headers, members, and attributes
+│   │   ├── constant_pool.go        # All JVMS constant-pool tags and resolvers
 │   │   ├── reader.go               # Bounds-checked big-endian reader
-│   │   └── attributes.go           # Code, exception, and line-number attributes
+│   │   ├── attributes.go           # Code, exception, and line-number attributes
+│   │   └── class_test.go           # Decoder unit tests
 │   ├── ir/                         # Intermediate representation
-│   │   ├── block.go                # Basic blocks and CFG
-│   │   ├── instruction.go          # Normalised SSA instructions
-│   │   └── stack_eval.go           # Abstract operand-stack evaluator
+│   │   ├── instruction.go          # Normalised SSA-style instructions
+│   │   ├── stack_eval.go           # Operand-stack evaluator and branch lowering
+│   │   └── stack_eval_test.go      # IR unit tests
 │   ├── codegen/                    # Go transpilation
-│   │   ├── generator.go            # Code generation driver
-│   │   ├── translator.go           # IR blocks to Go AST nodes
-│   │   └── type_map.go             # JVM descriptors to Go types
-│   └── builder/                    # Toolchain execution
-│       └── compiler.go             # Invokes go build with optimisation flags
+│   │   └── generator.go            # IR to Go AST, formatting via go/format
+│   └── builder/                    # Toolchain execution (Phase 6)
 ├── pkg/
 │   └── runtime/                    # Embedded shims baked into generated output
 │       ├── java/
@@ -163,6 +161,9 @@ barista/
 │       │   └── util/
 │       └── kotlin/
 │           └── jvm/
+├── docs/
+│   ├── conventions.md              # AI-agent conventions and case-study rule
+│   └── case-studies/               # Recorded non-obvious problems and fixes
 ├── tests/
 │   ├── fixtures/                   # Java and Kotlin sources for verification
 │   │   ├── java/
@@ -208,14 +209,20 @@ The CLI exposes three commands, following the coffee theme:
 
 | Command | Purpose | Status |
 | --- | --- | --- |
-| `barista grind <input>` | Disassemble a class or JAR into a readable IR dump | planned |
-| `barista brew <input>` | Run the full pipeline and emit a Go module | planned |
+| `barista grind <input.class>` | Disassemble a class file into a readable IR dump | implemented |
+| `barista brew [-o output.go] <input.class>` | Run the Phase 1 pipeline and emit Go source | implemented |
 | `barista serve <input>` | Compile in memory and execute immediately | planned |
 
 ```sh
 ./bin/barista --help
 ./bin/barista version
+
+javac -d tests/fixtures/out tests/fixtures/java/Calculator.java
+./bin/barista grind tests/fixtures/out/Calculator.class
+./bin/barista brew -o out/calculator.go tests/fixtures/out/Calculator.class
 ```
+
+Phase 1 covers static methods using `int` arithmetic, conditionals, and loops. Instance methods, constructors, objects, strings, arrays, and exceptions are skipped or rejected with a diagnostic until their phases land.
 
 ---
 
@@ -233,20 +240,20 @@ Kotlin compiles to standard JVM bytecode, so the parser needs no Kotlin-specific
 
 | Phase | Goal | Key work | Status |
 | --- | --- | --- | --- |
-| 1 | Primitive calculator | Class-file parsing, constant pool, core integer opcodes, CFG-free codegen, `go/ast` printer | in progress |
-| 2 | Objects & control flow | `new`, `dup`, field access, constructors, basic blocks, labels | planned |
+| 1 | Primitive calculator | Class-file parsing, constant pool, core integer opcodes, branch/loop lowering, `go/ast` output, `grind`/`brew` | done |
+| 2 | Objects & control flow | `new`, `dup`, field access, constructors, object model, basic-block partitioning | planned |
 | 3 | Runtime & exceptions | Exception tables, `String`/`StringBuilder`, arrays | planned |
 | 4 | Kotlin engine | Switch bytecodes, stdlib intrinsics, data classes, singletons | planned |
 | 5 | Networking | `net/http`-backed server pipelines, socket interception | planned |
-| 6 | Production tooling | `grind` / `brew` / `serve`, stripped static binaries | planned |
+| 6 | Production tooling | `serve`, stripped static binaries, packaging | planned |
 
 ### Immediate next steps
 
-1. Implement the bounds-checked big-endian reader in `internal/classfile/reader.go`.
-2. Validate the `0xCAFEBABE` magic and supported class-file versions.
-3. Parse the full constant pool (all tag types) into an indexed lookup table.
-4. Parse class metadata, fields, methods, and `Code` attributes.
-5. Compile `tests/fixtures/java/Calculator.java` and assert that method bytecodes are recovered exactly.
+1. Add class instantiation and field access: `new`, `dup`, `getfield`, `putfield`, `invokespecial` (constructors).
+2. Introduce the generated object model with pointer receivers and Go-native allocation.
+3. Replace linear `goto` lowering with explicit basic blocks and structured control flow where possible.
+4. Parse and emit exception tables into `panic`/`recover` handlers.
+5. Extend the fixture suite with objects and exception-handling programs.
 
 ---
 

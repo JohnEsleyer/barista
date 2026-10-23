@@ -8,6 +8,7 @@ Each case study follows the naming convention, structure, and quality bar define
 
 | Date | Area | Title | Status |
 | --- | --- | --- | --- |
-| — | — | No case studies recorded yet. | — |
+| 2026-10-23 | ir | [JVM branch offsets are relative to the opcode, not the next instruction](2026-10-23-jvm-branch-offset-origin.md) | Resolved |
+| 2026-10-23 | codegen | [Go rejects goto across SSA variable declarations](2026-10-23-go-goto-over-declarations.md) | Resolved |
 
 When adding a case study, add a row above and keep the table ordered newest first.

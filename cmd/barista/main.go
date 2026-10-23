@@ -7,6 +7,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/JohnEsleyer/barista/internal/classfile"
+	"github.com/JohnEsleyer/barista/internal/codegen"
+	"github.com/JohnEsleyer/barista/internal/ir"
 )
 
 const version = "0.1.0-dev"
@@ -50,11 +56,11 @@ Usage:
   barista <command> [options]
 
 Commands:
-  grind <input>   Disassemble a .class or .jar into Barista IR
-  brew  <input>   Compile a .class or .jar into a Go module/binary
-  serve <input>   Compile and run an application immediately
-  version         Print the Barista version
-  help            Show this help text
+  grind <input.class>   Disassemble a class file and print Barista IR
+  brew  <input.class>   Compile a class file to idiomatic Go source
+  serve <input>         Compile and run an application immediately (planned)
+  version               Print the Barista version
+  help                  Show this help text
 
 Run "barista <command> -h" for command-specific options.
 `)
@@ -64,7 +70,7 @@ func runGrind(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("grind", flag.ContinueOnError)
 	fs.SetOutput(stdout)
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: barista grind <input.class|input.jar>")
+		fmt.Fprintln(fs.Output(), "Usage: barista grind <input.class>")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -72,17 +78,47 @@ func runGrind(args []string, stdout io.Writer) error {
 	}
 	if fs.NArg() != 1 {
 		fs.Usage()
-		return errors.New("grind requires exactly one input file")
+		return errors.New("grind requires a path to a .class file")
 	}
-	return errors.New("grind is not implemented yet")
+
+	classPath := fs.Arg(0)
+	cf, err := classfile.ParseClassFilePath(classPath)
+	if err != nil {
+		return fmt.Errorf("grind failed to parse class: %w", err)
+	}
+
+	fmt.Fprintf(stdout, "Class: %s (version %d.%d)\n", cf.ThisClass, cf.MajorVersion, cf.MinorVersion)
+	fmt.Fprintf(stdout, "Super: %s\n\n", cf.SuperClass)
+
+	for _, m := range cf.Methods {
+		code := m.FindCode()
+		if code == nil {
+			continue
+		}
+		if !m.IsStatic() || strings.HasPrefix(m.Name, "<") {
+			fmt.Fprintf(stdout, "Method %s%s: [skipped: instance methods and initializers are Phase 2]\n\n", m.Name, m.Descriptor)
+			continue
+		}
+		mir, err := ir.LowerBytecodeWithPool(m.Name, m.Descriptor, code.Code, m.IsStatic(), cf.ConstantPool)
+		if err != nil {
+			fmt.Fprintf(stdout, "Method %s%s: [Lowering Error: %v]\n\n", m.Name, m.Descriptor, err)
+			continue
+		}
+		fmt.Fprintf(stdout, "Method %s%s:\n", m.Name, m.Descriptor)
+		for _, inst := range mir.Instructions {
+			fmt.Fprintf(stdout, "    %s\n", inst)
+		}
+		fmt.Fprintln(stdout)
+	}
+	return nil
 }
 
 func runBrew(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("brew", flag.ContinueOnError)
 	fs.SetOutput(stdout)
-	out := fs.String("o", "", "output directory for the generated Go module")
+	outPath := fs.String("o", "", "output .go file path (defaults to stdout)")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: barista brew [-o output-dir] <input.class|input.jar>")
+		fmt.Fprintln(fs.Output(), "Usage: barista brew [-o output.go] <input.class>")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -90,17 +126,57 @@ func runBrew(args []string, stdout io.Writer) error {
 	}
 	if fs.NArg() != 1 {
 		fs.Usage()
-		return errors.New("brew requires exactly one input file")
+		return errors.New("brew requires a path to a .class file")
 	}
-	_ = *out
-	return errors.New("brew is not implemented yet")
+
+	classPath := fs.Arg(0)
+	cf, err := classfile.ParseClassFilePath(classPath)
+	if err != nil {
+		return fmt.Errorf("brew failed to parse class: %w", err)
+	}
+
+	loweredMethods := make([]*ir.MethodIR, 0)
+	for _, m := range cf.Methods {
+		code := m.FindCode()
+		if code == nil {
+			continue
+		}
+		if !m.IsStatic() || strings.HasPrefix(m.Name, "<") {
+			continue
+		}
+		mir, err := ir.LowerBytecodeWithPool(m.Name, m.Descriptor, code.Code, m.IsStatic(), cf.ConstantPool)
+		if err != nil {
+			return fmt.Errorf("failed compiling method %s: %w", m.Name, err)
+		}
+		loweredMethods = append(loweredMethods, mir)
+	}
+
+	goCode, err := codegen.GenerateGo(cf, loweredMethods)
+	if err != nil {
+		return fmt.Errorf("code generation failed: %w", err)
+	}
+
+	if *outPath != "" {
+		if dir := filepath.Dir(*outPath); dir != "." {
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				return err
+			}
+		}
+		if err := os.WriteFile(*outPath, goCode, 0644); err != nil {
+			return fmt.Errorf("failed to write output: %w", err)
+		}
+		fmt.Fprintf(stdout, "Brewed %s -> %s\n", classPath, *outPath)
+	} else {
+		fmt.Fprintln(stdout, strings.TrimSpace(string(goCode)))
+	}
+	return nil
 }
 
 func runServe(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stdout)
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: barista serve <input.class|input.jar>")
+		fmt.Fprintln(fs.Output(), "Usage: barista serve <input.class>")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -108,7 +184,7 @@ func runServe(args []string, stdout io.Writer) error {
 	}
 	if fs.NArg() != 1 {
 		fs.Usage()
-		return errors.New("serve requires exactly one input file")
+		return errors.New("serve requires a path to a .class file")
 	}
 	return errors.New("serve is not implemented yet")
 }
