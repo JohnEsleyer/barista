@@ -1,8 +1,12 @@
 # Barista
 
+> **Love writing Java or Kotlin? Deploy like Go.**
+>
+> If you love writing Java or Kotlin, but you want to deploy apps that feel like Go programs — **sub-second builds, zero-effort cross-compilation, tiny 15MB RAM footprints, and smooth operation on $4/month VPS boxes** — Barista is built for you.
+
 **Barista** is an ahead-of-time (AOT) static de-stacking compiler for JVM bytecode, written in Go. It ingests standard `.class` files and `.jar` archives produced by `javac` or `kotlinc`, reconstructs their stack-based execution model as a register/variable-based IR, and emits idiomatic Go source that is compiled into a single, statically linked binary.
 
-The goal is to make JVM backends viable on very small machines — $4/month VPS nodes with 512MB–1GB of RAM, or containers with even less — by removing the JVM from the deployment equation entirely.
+You keep the language and toolchain you already love. You leave behind the JVM's operational baggage: no 200MB base runtime, no JIT warm-up spikes, no JRE packaging, and no guessing whether your app will fit on a $4/month box. Write Java or Kotlin; ship one native binary.
 
 > **Status:** early scaffold. The repository currently contains the project structure and CLI skeleton. The compiler pipeline is under active development; see the [roadmap](#roadmap).
 
@@ -10,16 +14,19 @@ The goal is to make JVM backends viable on very small machines — $4/month VPS 
 
 ## Why Barista?
 
-Running a JVM application on a small instance is expensive before your code even executes:
+You should not have to choose between JVM ergonomics and Go-like operations. Barista closes the gap:
 
-| Problem | JVM behaviour | Barista approach |
+| | JVM deployment | Barista deployment |
 | --- | --- | --- |
-| Base runtime overhead | OpenJDK reserves roughly 100–250MB RSS at boot | Compile to a native Go binary with no VM |
-| JIT contention | Compilation spikes compete for a single vCPU | No JIT; code is compiled ahead of time |
-| Delayed reclamation | G1/ZGC assume memory is plentiful and shrink lazily | Delegate allocation and GC to the Go runtime |
-| Deployment footprint | JRE + application JAR | One self-contained executable |
-| Startup latency | Hundreds of milliseconds to seconds | Target sub-5ms startup |
-| Cross-compilation | Platform-specific JREs | Inherited from the Go toolchain |
+| **Build experience** | JVM build tooling plus JRE packaging | Go toolchain with sub-second rebuilds |
+| **Base runtime overhead** | OpenJDK reserves roughly 100–250MB RSS at boot | One static binary with no VM |
+| **JIT contention** | Compilation spikes compete for a single vCPU | No JIT; code is compiled ahead of time |
+| **Delayed reclamation** | G1/ZGC assume memory is plentiful and shrink lazily | Delegate allocation and GC to the Go runtime |
+| **Memory footprint** | 100MB+ before your application does any work | Target around 15MB RSS |
+| **Deployment footprint** | JRE + application JAR | One self-contained executable |
+| **Startup latency** | Hundreds of milliseconds to seconds | Target sub-5ms startup |
+| **Cross-compilation** | Platform-specific JREs | Inherited from the Go toolchain |
+| **Hosting cost** | Needs headroom for the runtime itself | Smooth operation on $4/month VPS boxes |
 
 ---
 
