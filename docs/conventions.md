@@ -2,6 +2,19 @@
 
 This document defines working conventions for AI agents contributing to Barista. Its purpose is to preserve engineering context so future agents can build on what has already been learned instead of rediscovering it.
 
+## Progress Tracking
+
+[`docs/progress.md`](progress.md) is the canonical development tracker. At the end of every meaningful task:
+
+- Update the current phase and status.
+- Check off completed capabilities only when a test or reproducible command proves them.
+- Add or remove known limitations.
+- Record the verification result and the latest implementation commit.
+- Set the exact next task.
+- Link any new case study.
+
+Do not mark a phase complete based only on code being written. The tracker must reflect verified behaviour.
+
 ## The Case Study Rule
 
 ### Rule

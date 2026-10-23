@@ -9,6 +9,8 @@
 You keep the language and toolchain you already love. You leave behind the JVM's operational baggage: no 200MB base runtime, no JIT warm-up spikes, no JRE packaging, and no guessing whether your app will fit on a $4/month box. Write Java or Kotlin; ship one native binary.
 
 > **Status:** Phase 1 is implemented. Barista can parse class files, lower static integer methods (including branches and loops) into de-stacked IR, and emit runnable Go source. Objects, strings, arrays, exceptions, and Kotlin runtime shims are next; see the [roadmap](#roadmap).
+>
+> **Detailed progress:** [`docs/progress.md`](docs/progress.md) is the canonical tracker for completed capabilities, known limitations, test status, and the next task.
 
 ---
 
@@ -163,6 +165,7 @@ barista/
 │           └── jvm/
 ├── docs/
 │   ├── conventions.md              # AI-agent conventions and case-study rule
+│   ├── progress.md                 # Canonical development progress tracker
 │   └── case-studies/               # Recorded non-obvious problems and fixes
 ├── tests/
 │   ├── fixtures/                   # Java and Kotlin sources for verification
