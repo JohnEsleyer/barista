@@ -124,6 +124,77 @@ func TestLowerBytecodeLdc(t *testing.T) {
 	}
 }
 
+func TestLowerBytecodeLdcStringAndClass(t *testing.T) {
+	cp := classfile.ConstantPool{
+		nil,
+		&classfile.ConstantUtf8{Value: "Freshly brewed"},
+		&classfile.ConstantString{StringIndex: 1},
+		&classfile.ConstantClass{NameIndex: 1},
+	}
+	code := []byte{
+		ir.BytecodeLdc, 0x02,
+		ir.BytecodePop,
+		ir.BytecodeLdc, 0x03,
+		ir.BytecodePop,
+		ir.BytecodeReturn,
+	}
+	mir, err := ir.LowerBytecodeWithPool("constants", "()V", code, true, cp)
+	if err != nil {
+		t.Fatalf("lower bytecode: %v", err)
+	}
+	if len(mir.Instructions) != 3 {
+		t.Fatalf("got %d instructions, want 3: %+v", len(mir.Instructions), mir.Instructions)
+	}
+	if mir.Instructions[0].Op != ir.OpConstString || mir.Instructions[0].Descriptor != "Freshly brewed" {
+		t.Errorf("first instruction = %+v, want CONST_STRING", mir.Instructions[0])
+	}
+	if mir.Instructions[1].Op != ir.OpConstClass || mir.Instructions[1].Descriptor != "Freshly brewed" {
+		t.Errorf("second instruction = %+v, want CONST_CLASS", mir.Instructions[1])
+	}
+}
+
+func TestLowerBytecodeArrays(t *testing.T) {
+	code := []byte{
+		ir.BytecodeIconst2,
+		ir.BytecodeNewarray, 10,
+		ir.BytecodeAstore0,
+		ir.BytecodeAload0,
+		ir.BytecodeIconst0,
+		ir.BytecodeBipush, 42,
+		ir.BytecodeIastore,
+		ir.BytecodeAload0,
+		ir.BytecodeIconst0,
+		ir.BytecodeIaload,
+		ir.BytecodeIreturn,
+	}
+	mir, err := ir.LowerBytecode("first", "()I", code, true)
+	if err != nil {
+		t.Fatalf("lower bytecode: %v", err)
+	}
+	for _, op := range []ir.OpKind{ir.OpNewArray, ir.OpArrayStore, ir.OpArrayLoad, ir.OpReturn} {
+		found := false
+		for _, inst := range mir.Instructions {
+			if inst.Op == op {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("instructions do not contain %s: %+v", op, mir.Instructions)
+		}
+	}
+}
+
+func TestLowerBytecodeAconstNull(t *testing.T) {
+	mir, err := ir.LowerBytecode("nullValue", "()V", []byte{ir.BytecodeAconstNull, ir.BytecodePop, ir.BytecodeReturn}, true)
+	if err != nil {
+		t.Fatalf("lower aconst_null: %v", err)
+	}
+	if len(mir.Instructions) != 2 || mir.Instructions[0].Op != ir.OpConstNull {
+		t.Fatalf("unexpected instructions: %+v", mir.Instructions)
+	}
+}
+
 func TestLowerBytecodeRejectsValuesAcrossBranches(t *testing.T) {
 	// The branch leaves v0 on the operand stack at the target.
 	code := []byte{
@@ -139,8 +210,9 @@ func TestLowerBytecodeRejectsValuesAcrossBranches(t *testing.T) {
 }
 
 func TestLowerBytecodeRejectsUnsupportedOpcode(t *testing.T) {
-	_, err := ir.LowerBytecode("bad", "()V", []byte{0x01, ir.BytecodeReturn}, true)
+	// 0xC0 is checkcast, which Phase 3 does not lower yet.
+	_, err := ir.LowerBytecode("bad", "()V", []byte{0xC0, 0x00, 0x01, ir.BytecodeReturn}, true)
 	if err == nil {
-		t.Fatal("expected an error for aconst_null")
+		t.Fatal("expected an error for checkcast")
 	}
 }

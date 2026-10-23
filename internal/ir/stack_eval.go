@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/JohnEsleyer/barista/internal/classfile"
 )
@@ -34,6 +35,8 @@ const (
 	BytecodeAload1        = 0x2b
 	BytecodeAload2        = 0x2c
 	BytecodeAload3        = 0x2d
+	BytecodeIaload        = 0x2e
+	BytecodeAaload        = 0x32
 	BytecodeIstore        = 0x36
 	BytecodeAstore        = 0x3a
 	BytecodeIstore0       = 0x3b
@@ -44,6 +47,9 @@ const (
 	BytecodeAstore1       = 0x4c
 	BytecodeAstore2       = 0x4d
 	BytecodeAstore3       = 0x4e
+	BytecodeIastore       = 0x4f
+	BytecodeAastore       = 0x53
+	BytecodePop           = 0x57
 	BytecodeDup           = 0x59
 	BytecodeIadd          = 0x60
 	BytecodeIsub          = 0x64
@@ -75,6 +81,10 @@ const (
 	BytecodeInvokespecial = 0xb7
 	BytecodeInvokestatic  = 0xb8
 	BytecodeNew           = 0xbb
+	BytecodeNewarray      = 0xbc
+	BytecodeAnewarray     = 0xbd
+	BytecodeArraylength   = 0xbe
+	BytecodeAthrow        = 0xbf
 	BytecodeGotoW         = 0xc8
 )
 
@@ -93,7 +103,36 @@ func LowerBytecodeWithPool(methodName, descriptor string, code []byte, isStatic 
 // LowerMethod lowers one method owned by ownerClass. ownerClass is used to seed
 // local 0 for instance methods and to disambiguate generated object types.
 func LowerMethod(cp classfile.ConstantPool, ownerClass, methodName, descriptor string, code []byte, isStatic bool) (*MethodIR, error) {
-	targets, err := scanBytecode(code)
+	return LowerMethodWithExceptions(cp, ownerClass, methodName, descriptor, code, isStatic, nil)
+}
+
+// LowerMethodWithExceptions lowers a method and carries its JVM exception table
+// into the IR. Catch types are resolved against cp; a zero catch type becomes a
+// catch-all java/lang/Throwable trap.
+func LowerMethodWithExceptions(cp classfile.ConstantPool, ownerClass, methodName, descriptor string, code []byte, isStatic bool, excTable []classfile.ExceptionTableEntry) (*MethodIR, error) {
+	traps := make([]ExceptionTrap, 0, len(excTable))
+	handlerPCs := make(map[int]bool)
+	extraTargets := make([]int, 0, len(excTable))
+	for _, entry := range excTable {
+		catchClass := "java/lang/Throwable"
+		if entry.CatchType != 0 {
+			resolved, err := cp.ResolveClassName(entry.CatchType)
+			if err != nil {
+				return nil, fmt.Errorf("method %s: resolve catch type: %w", methodName, err)
+			}
+			catchClass = resolved
+		}
+		traps = append(traps, ExceptionTrap{
+			StartPC:    int(entry.StartPC),
+			EndPC:      int(entry.EndPC),
+			HandlerPC:  int(entry.HandlerPC),
+			CatchClass: catchClass,
+		})
+		handlerPCs[int(entry.HandlerPC)] = true
+		extraTargets = append(extraTargets, int(entry.HandlerPC))
+	}
+
+	targets, err := scanBytecodeWithTargets(code, extraTargets)
 	if err != nil {
 		return nil, fmt.Errorf("invalid bytecode in %s: %w", methodName, err)
 	}
@@ -108,12 +147,13 @@ func LowerMethod(cp classfile.ConstantPool, ownerClass, methodName, descriptor s
 	}
 
 	mir := &MethodIR{
-		OwnerClass:   ownerClass,
-		Name:         methodName,
-		Descriptor:   descriptor,
-		Instructions: make([]Instruction, 0),
-		ParamCount:   md.ParamSlots,
-		IsStatic:     isStatic,
+		OwnerClass:     ownerClass,
+		Name:           methodName,
+		Descriptor:     descriptor,
+		Instructions:   make([]Instruction, 0),
+		ExceptionTraps: traps,
+		ParamCount:     md.ParamSlots,
+		IsStatic:       isStatic,
 	}
 
 	localTypes := make(map[int]string)
@@ -200,12 +240,21 @@ func LowerMethod(cp classfile.ConstantPool, ownerClass, methodName, descriptor s
 	reachable := true
 	for pc < len(code) {
 		if label, ok := labels[pc]; ok {
-			if len(stack) != 0 {
-				return nil, fmt.Errorf("branch target pc %d is reached with %d operand-stack values; phi nodes are not supported yet", pc, len(stack))
+			if handlerPCs[pc] {
+				emit(pc, Instruction{Op: OpLabel, Label: label})
+				stack = nil
+				reachable = true
+				caught := nextVal("Ljava/lang/Throwable;")
+				emit(pc, Instruction{Op: OpLoadException, Result: &caught})
+				push(caught)
+			} else {
+				if len(stack) != 0 {
+					return nil, fmt.Errorf("branch target pc %d is reached with %d operand-stack values; phi nodes are not supported yet", pc, len(stack))
+				}
+				emit(pc, Instruction{Op: OpLabel, Label: label})
+				stack = nil
+				reachable = true
 			}
-			emit(pc, Instruction{Op: OpLabel, Label: label})
-			stack = nil
-			reachable = true
 		}
 		if !reachable {
 			decoded, err := decodeInstruction(code, pc)
@@ -260,11 +309,22 @@ func LowerMethod(cp classfile.ConstantPool, ownerClass, methodName, descriptor s
 				index = idx
 				pc += 2
 			}
-			value, err := resolveIntConstant(cp, index)
+			kind, intValue, text, className, err := resolveLdcConstant(cp, index)
 			if err != nil {
 				return nil, err
 			}
-			pushConstAt(opPC, value)
+			switch kind {
+			case ldcInteger:
+				pushConstAt(opPC, intValue)
+			case ldcString:
+				result := nextVal("Ljava/lang/String;")
+				emit(opPC, Instruction{Op: OpConstString, Result: &result, Descriptor: text})
+				push(result)
+			case ldcClass:
+				result := nextVal("Ljava/lang/Class;")
+				emit(opPC, Instruction{Op: OpConstClass, Result: &result, Descriptor: className})
+				push(result)
+			}
 
 		case BytecodeLdc2W:
 			return nil, fmt.Errorf("ldc2_w is not supported yet (method %s)", methodName)
@@ -277,7 +337,7 @@ func LowerMethod(cp classfile.ConstantPool, ownerClass, methodName, descriptor s
 			pc++
 			switch op {
 			case BytecodeIload:
-				loadLocalAt(opPC, int(index), "I")
+				loadLocalAt(opPC, int(index), "")
 			case BytecodeAload:
 				loadLocalAt(opPC, int(index), "")
 			case BytecodeIstore:
@@ -292,7 +352,7 @@ func LowerMethod(cp classfile.ConstantPool, ownerClass, methodName, descriptor s
 			}
 
 		case BytecodeIload0, BytecodeIload1, BytecodeIload2, BytecodeIload3:
-			loadLocalAt(opPC, int(op-BytecodeIload0), "I")
+			loadLocalAt(opPC, int(op-BytecodeIload0), "")
 
 		case BytecodeAload0, BytecodeAload1, BytecodeAload2, BytecodeAload3:
 			loadLocalAt(opPC, int(op-BytecodeAload0), "")
@@ -316,6 +376,11 @@ func LowerMethod(cp classfile.ConstantPool, ownerClass, methodName, descriptor s
 			}
 			push(value)
 			push(value)
+
+		case BytecodePop:
+			if _, err := pop(opPC); err != nil {
+				return nil, err
+			}
 
 		case BytecodeIadd, BytecodeIsub, BytecodeImul, BytecodeIdiv:
 			right, err := pop(opPC)
@@ -648,15 +713,110 @@ func LowerMethod(cp classfile.ConstantPool, ownerClass, methodName, descriptor s
 			stack = nil
 			reachable = false
 
+		case BytecodeNewarray:
+			atype, err := readU1(code, pc)
+			if err != nil {
+				return nil, err
+			}
+			pc++
+			arrayDesc, ok := newArrayDescriptor(atype)
+			if !ok {
+				return nil, fmt.Errorf("unsupported newarray atype %d at pc %d", atype, opPC)
+			}
+			size, err := pop(opPC)
+			if err != nil {
+				return nil, err
+			}
+			result := nextVal(arrayDesc)
+			emit(opPC, Instruction{Op: OpNewArray, Result: &result, Args: []Value{size}, Descriptor: arrayDesc})
+			push(result)
+
+		case BytecodeAnewarray:
+			index, err := readU2(code, pc)
+			if err != nil {
+				return nil, err
+			}
+			pc += 2
+			element, err := cp.ResolveClassName(index)
+			if err != nil {
+				return nil, err
+			}
+			size, err := pop(opPC)
+			if err != nil {
+				return nil, err
+			}
+			arrayDesc := "[L" + element + ";"
+			if strings.HasPrefix(element, "[") {
+				arrayDesc = "[" + element
+			}
+			result := nextVal(arrayDesc)
+			emit(opPC, Instruction{Op: OpANewArray, Result: &result, Args: []Value{size}, Descriptor: arrayDesc})
+			push(result)
+
+		case BytecodeArraylength:
+			array, err := pop(opPC)
+			if err != nil {
+				return nil, err
+			}
+			result := nextVal("I")
+			emit(opPC, Instruction{Op: OpArrayLength, Result: &result, Args: []Value{array}})
+			push(result)
+
+		case BytecodeIaload, BytecodeAaload:
+			index, err := pop(opPC)
+			if err != nil {
+				return nil, err
+			}
+			array, err := pop(opPC)
+			if err != nil {
+				return nil, err
+			}
+			elementType := "I"
+			if op == BytecodeAaload {
+				elementType, err = arrayElementDescriptor(array.Type)
+				if err != nil {
+					return nil, fmt.Errorf("aaload at pc %d: %w", opPC, err)
+				}
+			}
+			result := nextVal(elementType)
+			emit(opPC, Instruction{Op: OpArrayLoad, Result: &result, Args: []Value{array, index}, Descriptor: array.Type})
+			push(result)
+
+		case BytecodeIastore, BytecodeAastore:
+			value, err := pop(opPC)
+			if err != nil {
+				return nil, err
+			}
+			index, err := pop(opPC)
+			if err != nil {
+				return nil, err
+			}
+			array, err := pop(opPC)
+			if err != nil {
+				return nil, err
+			}
+			emit(opPC, Instruction{Op: OpArrayStore, Args: []Value{array, index, value}, Descriptor: array.Type})
+
+		case BytecodeAthrow:
+			exception, err := pop(opPC)
+			if err != nil {
+				return nil, err
+			}
+			emit(opPC, Instruction{Op: OpThrow, Args: []Value{exception}})
+			stack = nil
+			reachable = false
+
 		case BytecodeAconstNull:
-			return nil, fmt.Errorf("aconst_null is not supported yet (method %s)", methodName)
+			result := nextVal("Ljava/lang/Object;")
+			emit(opPC, Instruction{Op: OpConstNull, Result: &result})
+			push(result)
 
 		default:
 			return nil, fmt.Errorf("unsupported opcode 0x%02X at pc %d in %s", op, opPC, methodName)
 		}
 	}
 
-	cfg, err := buildCFG(code, mir.Instructions)
+	cfg, err := buildCFG(code, mir.Instructions, extraTargets)
 	if err != nil {
 		return nil, fmt.Errorf("method %s: %w", methodName, err)
 	}
@@ -706,25 +866,79 @@ func conditionForCompareBranch(op byte) BranchCondition {
 	}
 }
 
-func resolveIntConstant(cp classfile.ConstantPool, index uint16) (int32, error) {
+type ldcKind int
+
+const (
+	ldcInteger ldcKind = iota
+	ldcString
+	ldcClass
+)
+
+func resolveLdcConstant(cp classfile.ConstantPool, index uint16) (ldcKind, int32, string, string, error) {
 	if cp == nil {
-		return 0, fmt.Errorf("ldc requires a constant pool")
+		return ldcInteger, 0, "", "", fmt.Errorf("ldc requires a constant pool")
 	}
 	if index == 0 || int(index) >= len(cp) || cp[index] == nil {
-		return 0, fmt.Errorf("invalid constant pool index %d for ldc", index)
+		return ldcInteger, 0, "", "", fmt.Errorf("invalid constant pool index %d for ldc", index)
 	}
 	switch entry := cp[index].(type) {
 	case *classfile.ConstantInteger:
-		return entry.Value, nil
+		return ldcInteger, entry.Value, "", "", nil
+	case *classfile.ConstantString:
+		text, err := cp.ResolveString(index)
+		if err != nil {
+			return ldcString, 0, "", "", err
+		}
+		return ldcString, 0, text, "", nil
+	case *classfile.ConstantClass:
+		name, err := cp.ResolveClassName(index)
+		if err != nil {
+			return ldcClass, 0, "", "", err
+		}
+		return ldcClass, 0, "", name, nil
 	default:
-		return 0, fmt.Errorf("ldc constant at index %d has unsupported type %T", index, entry)
+		return ldcInteger, 0, "", "", fmt.Errorf("ldc constant at index %d has unsupported type %T", index, entry)
 	}
+}
+
+func newArrayDescriptor(atype uint8) (string, bool) {
+	switch atype {
+	case 4:
+		return "[Z", true
+	case 5:
+		return "[C", true
+	case 6:
+		return "[F", true
+	case 7:
+		return "[D", true
+	case 8:
+		return "[B", true
+	case 9:
+		return "[S", true
+	case 10:
+		return "[I", true
+	case 11:
+		return "[J", true
+	default:
+		return "", false
+	}
+}
+
+func arrayElementDescriptor(arrayDesc string) (string, error) {
+	if len(arrayDesc) < 2 || arrayDesc[0] != '[' {
+		return "", fmt.Errorf("expected array descriptor, got %q", arrayDesc)
+	}
+	element := arrayDesc[1:]
+	if element == "" {
+		return "", fmt.Errorf("array descriptor %q has no element type", arrayDesc)
+	}
+	return element, nil
 }
 
 // buildCFG partitions a method's IR into basic blocks and connects the blocks
 // with directed edges. Branch targets are recorded by the lowering step.
-func buildCFG(code []byte, instructions []Instruction) (*ControlFlowGraph, error) {
-	leaders, err := collectLeaders(code)
+func buildCFG(code []byte, instructions []Instruction, extraLeaders []int) (*ControlFlowGraph, error) {
+	leaders, err := collectLeaders(code, extraLeaders)
 	if err != nil {
 		return nil, err
 	}
@@ -781,8 +995,9 @@ func buildCFG(code []byte, instructions []Instruction) (*ControlFlowGraph, error
 			}
 			addEdge(block, target)
 			addFallthroughEdge(cfg, block)
-		case OpReturn:
-			// No successors.
+		case OpReturn, OpThrow:
+			// No normal successors. Exception edges are represented by
+			// MethodIR.ExceptionTraps rather than CFG edges.
 		default:
 			addFallthroughEdge(cfg, block)
 		}
@@ -791,8 +1006,11 @@ func buildCFG(code []byte, instructions []Instruction) (*ControlFlowGraph, error
 	return cfg, nil
 }
 
-func collectLeaders(code []byte) ([]int, error) {
+func collectLeaders(code []byte, extraLeaders []int) ([]int, error) {
 	leaderSet := map[int]bool{0: true}
+	for _, extra := range extraLeaders {
+		leaderSet[extra] = true
+	}
 	for pc := 0; pc < len(code); {
 		decoded, err := decodeInstruction(code, pc)
 		if err != nil {
@@ -825,7 +1043,7 @@ func isControlTransfer(op byte) bool {
 	case BytecodeIfeq, BytecodeIfne, BytecodeIflt, BytecodeIfge, BytecodeIfgt, BytecodeIfle,
 		BytecodeIfIcmpeq, BytecodeIfIcmpne, BytecodeIfIcmplt, BytecodeIfIcmpge,
 		BytecodeIfIcmpgt, BytecodeIfIcmple, BytecodeGoto, BytecodeGotoW,
-		BytecodeIreturn, BytecodeAreturn, BytecodeReturn:
+		BytecodeIreturn, BytecodeAreturn, BytecodeReturn, BytecodeAthrow:
 		return true
 	default:
 		return false
@@ -855,8 +1073,15 @@ type decodedInstruction struct {
 }
 
 func scanBytecode(code []byte) ([]int, error) {
+	return scanBytecodeWithTargets(code, nil)
+}
+
+func scanBytecodeWithTargets(code []byte, extraTargets []int) ([]int, error) {
 	boundaries := make(map[int]bool)
 	targetSet := make(map[int]bool)
+	for _, target := range extraTargets {
+		targetSet[target] = true
+	}
 	for pc := 0; pc < len(code); {
 		boundaries[pc] = true
 		decoded, err := decodeInstruction(code, pc)
@@ -894,17 +1119,20 @@ func decodeInstruction(code []byte, pc int) (decodedInstruction, error) {
 		BytecodeAload0, BytecodeAload1, BytecodeAload2, BytecodeAload3,
 		BytecodeIstore0, BytecodeIstore1, BytecodeIstore2, BytecodeIstore3,
 		BytecodeAstore0, BytecodeAstore1, BytecodeAstore2, BytecodeAstore3,
-		BytecodeDup,
+		BytecodeIaload, BytecodeAaload, BytecodeIastore, BytecodeAastore,
+		BytecodeArraylength, BytecodeAthrow,
+		BytecodePop, BytecodeDup,
 		BytecodeIadd, BytecodeIsub, BytecodeImul, BytecodeIdiv, BytecodeIneg,
 		BytecodeIreturn, BytecodeAreturn, BytecodeReturn:
 		return decodedInstruction{size: 1}, nil
-	case BytecodeBipush, BytecodeLdc, BytecodeIload, BytecodeAload, BytecodeIstore, BytecodeAstore:
+	case BytecodeBipush, BytecodeLdc, BytecodeIload, BytecodeAload, BytecodeIstore, BytecodeAstore,
+		BytecodeNewarray:
 		if pc+2 > len(code) {
 			return decodedInstruction{}, fmt.Errorf("truncated opcode 0x%02X at pc %d", op, pc)
 		}
 		return decodedInstruction{size: 2}, nil
 	case BytecodeSipush, BytecodeLdcW, BytecodeLdc2W, BytecodeIinc,
-		BytecodeNew, BytecodeGetfield, BytecodePutfield, BytecodeGetstatic, BytecodePutstatic,
+		BytecodeNew, BytecodeAnewarray, BytecodeGetfield, BytecodePutfield, BytecodeGetstatic, BytecodePutstatic,
 		BytecodeInvokevirtual, BytecodeInvokespecial, BytecodeInvokestatic:
 		if pc+3 > len(code) {
 			return decodedInstruction{}, fmt.Errorf("truncated opcode 0x%02X at pc %d", op, pc)

@@ -5,6 +5,30 @@ import (
 	"strings"
 )
 
+// runtimeTypeNames maps JVM runtime classes to their Go shim type names in the
+// lang package.
+var runtimeTypeNames = map[string]string{
+	"java/lang/Object":                    "Object",
+	"java/lang/String":                    "String",
+	"java/lang/StringBuilder":             "StringBuilder",
+	"java/lang/Class":                     "Class",
+	"java/lang/Throwable":                 "Throwable",
+	"java/lang/Exception":                 "Exception",
+	"java/lang/RuntimeException":          "RuntimeException",
+	"java/lang/NullPointerException":      "NullPointerException",
+	"java/lang/IndexOutOfBoundsException": "IndexOutOfBoundsException",
+	"java/io/PrintStream":                 "PrintStream",
+}
+
+func runtimeTypeName(internalName string) (string, bool) {
+	name, ok := runtimeTypeNames[internalName]
+	return name, ok
+}
+
+func langType(name string) ast.Expr {
+	return &ast.StarExpr{X: &ast.SelectorExpr{X: ast.NewIdent("lang"), Sel: ast.NewIdent(name)}}
+}
+
 // DescriptorToGoType converts one JVM field descriptor to a Go AST type.
 func DescriptorToGoType(desc string) ast.Expr {
 	switch desc {
@@ -29,8 +53,8 @@ func DescriptorToGoType(desc string) ast.Expr {
 	default:
 		if strings.HasPrefix(desc, "L") && strings.HasSuffix(desc, ";") {
 			raw := desc[1 : len(desc)-1]
-			if raw == "java/lang/String" {
-				return &ast.StarExpr{X: ast.NewIdent("JavaLangString")}
+			if name, ok := runtimeTypeName(raw); ok {
+				return langType(name)
 			}
 			return &ast.StarExpr{X: ast.NewIdent(CleanClassName(raw))}
 		}

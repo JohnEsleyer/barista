@@ -8,7 +8,7 @@
 
 You keep the language and toolchain you already love. You leave behind the JVM's operational baggage: no 200MB base runtime, no JIT warm-up spikes, no JRE packaging, and no guessing whether your app will fit on a $4/month box. Write Java or Kotlin; ship one native binary.
 
-> **Status:** Phase 2 is implemented. Barista can parse class files, lower static and instance integer methods (including branches, loops, objects, fields, constructors, and same-class dispatch) into de-stacked IR, build a control flow graph, and emit runnable Go source. Strings, arrays, exceptions, cross-class dispatch, and Kotlin runtime shims are next; see the [roadmap](#roadmap).
+> **Status:** Phase 3 is implemented. Barista can parse class files, lower static and instance integer methods (including branches, loops, objects, fields, constructors, same-class dispatch, strings, arrays, and caught exceptions) into de-stacked IR, build a control flow graph, and emit runnable Go source. Cross-class dispatch, inheritance, Kotlin runtime shims, and switch bytecodes are next; see the [roadmap](#roadmap).
 >
 > **Detailed progress:** [`docs/progress.md`](docs/progress.md) is the canonical tracker for completed capabilities, known limitations, test status, and the next task.
 
@@ -100,7 +100,8 @@ istore_3                         local_3 = t1
 | `long` | `int64` |
 | `float` | `float32` |
 | `double` | `float64` |
-| reference types | pointers to generated structs |
+| reference types | pointers to generated structs or `lang.*` runtime shims |
+| arrays | Go slices (`[]int32`, `[]*lang.String`, …) |
 
 JVMS operands `boolean`, `byte`, `char`, `short`, and `int` occupy one stack slot. Barista preserves the JVM's value semantics at the IR level and narrows to the declared Go type where required.
 
@@ -112,7 +113,7 @@ Each JVM class becomes a Go struct, and instance methods use pointer receivers:
 // com/example/User -> ComExampleUser
 type ComExampleUser struct {
     Id   int64
-    Name *JavaLangString
+    Name *lang.String
 }
 
 func (this *ComExampleUser) GetId() int64 {
@@ -127,11 +128,14 @@ Instances are always heap-allocated through pointers (`&ComExampleUser{}`), so o
 The generated program does not ship `rt.jar`. Critical-path JDK and Kotlin APIs are reimplemented in Go under `pkg/runtime`:
 
 - `java.lang.Object` — identity hash codes and default equality.
-- `java.lang.String` — immutable wrapper over Go strings with Java-compatible conversion helpers.
-- `java.lang.System` — `System.out` / `System.err` mapped to `os.Stdout` / `os.Stderr`.
-- `java.lang.Throwable` — exceptions lowered to Go error pairs or `panic`/`recover` depending on the exception table scope.
-- `java.util.ArrayList` — slice-backed list implementation.
-- `kotlin.jvm.internal.Intrinsics` — null-check and assertion intrinsics emitted by `kotlinc`.
+- `java.lang.String` — immutable wrapper over Go strings with length, equality, substring, concat, and character access.
+- `java.lang.StringBuilder` — mutable string builder backed by `strings.Builder`.
+- `java.lang.System` — `System.out` and `System.err` mapped to `os.Stdout` and `os.Stderr`, plus `currentTimeMillis`.
+- `java.lang.Throwable` / `Exception` / `RuntimeException` — exception values with message, cause, and string rendering.
+- `java.lang.NullPointerException` / `IndexOutOfBoundsException` — typed runtime exceptions that generated catch handlers can match.
+- `java.lang.Class` — class-literal metadata for `ldc` class constants.
+- `java.util.ArrayList` — slice-backed list implementation (planned).
+- `kotlin.jvm.internal.Intrinsics` — null-check and assertion intrinsics emitted by `kotlinc` (planned).
 
 ---
 
@@ -156,7 +160,9 @@ barista/
 │   │   ├── stack_eval.go           # Operand-stack evaluator and branch lowering
 │   │   └── stack_eval_test.go      # IR and CFG unit tests
 │   ├── codegen/                    # Go transpilation
-│   │   ├── generator.go            # IR to Go AST, formatting via go/format
+│   │   ├── generator.go            # Top-level IR to Go AST generation
+│   │   ├── function.go             # Method bodies, exception dispatch, runtime calls
+│   │   ├── runtime.go              # Runtime class/method mapping and import detection
 │   │   └── type_map.go             # JVM descriptors to Go types and names
 │   └── builder/                    # Toolchain execution (Phase 6)
 ├── pkg/
@@ -216,7 +222,7 @@ The CLI exposes three commands, following the coffee theme:
 | Command | Purpose | Status |
 | --- | --- | --- |
 | `barista grind <input.class>` | Disassemble a class file into a readable IR dump | implemented |
-| `barista brew [-o output.go] <input.class>` | Run the Phase 2 pipeline and emit Go source | implemented |
+| `barista brew [-o output.go] <input.class>` | Run the Phase 3 pipeline and emit Go source | implemented |
 | `barista serve <input>` | Compile in memory and execute immediately | planned |
 
 ```sh
@@ -228,7 +234,7 @@ javac -d tests/fixtures/out tests/fixtures/java/Calculator.java
 ./bin/barista brew -o out/calculator.go tests/fixtures/out/Calculator.class
 ```
 
-Phase 2 covers static and instance methods using `int` arithmetic, conditionals, loops, objects, instance and static fields, constructors, and same-class dispatch. Strings, arrays, exceptions, inheritance, cross-class dispatch, and Kotlin runtime behaviour are skipped or rejected with a diagnostic until their phases land.
+Phase 3 covers static and instance methods using `int` arithmetic, conditionals, loops, objects, instance and static fields, constructors, same-class dispatch, strings, arrays, `System.out`, and caught runtime exceptions. Cross-class dispatch, inheritance, user-defined exception classes, switch bytecodes, and Kotlin runtime behaviour are skipped or rejected with a diagnostic until their phases land.
 
 ---
 
@@ -248,18 +254,18 @@ Kotlin compiles to standard JVM bytecode, so the parser needs no Kotlin-specific
 | --- | --- | --- | --- |
 | 1 | Primitive calculator | Class-file parsing, constant pool, core integer opcodes, branch/loop lowering, `go/ast` output, `grind`/`brew` | done |
 | 2 | Objects & control flow | `new`, `dup`, field access, constructors, object model, basic-block partitioning | done |
-| 3 | Runtime & exceptions | Exception tables, `String`/`StringBuilder`, arrays | planned |
+| 3 | Runtime & exceptions | Exception tables, `String`/`StringBuilder`, arrays, `System.out`, runtime shims | done |
 | 4 | Kotlin engine | Switch bytecodes, stdlib intrinsics, data classes, singletons | planned |
 | 5 | Networking | `net/http`-backed server pipelines, socket interception | planned |
 | 6 | Production tooling | `serve`, stripped static binaries, packaging | planned |
 
 ### Immediate next steps
 
-1. Add array allocation and access: `newarray`, `anewarray`, `iaload`, `iastore`, and related opcodes.
-2. Replace the generated `JavaLangString` placeholder with a real runtime-backed String wrapper.
-3. Parse and emit exception tables into `panic`/`recover` handlers.
-4. Extend the fixture suite with arrays, strings, and exception-handling programs.
-5. Add cross-class dispatch and inheritance support after the single-class object model is stable.
+1. Add `tableswitch` and `lookupswitch` lowering with a Kotlin fixture.
+2. Implement `kotlin.jvm.internal.Intrinsics` null-check and assertion shims.
+3. Add cross-class dispatch and inheritance support so Kotlin stdlib calls can resolve beyond runtime shims.
+4. Introduce PHI/stack-merge values at branch targets to unlock more compiler output.
+5. Extend array lowering to the remaining primitive array opcodes and add `checkcast` / `instanceof`.
 
 ---
 

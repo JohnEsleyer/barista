@@ -2,6 +2,7 @@ package tests
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -193,6 +194,121 @@ func TestCounterPipeline(t *testing.T) {
 	runGeneratedCounter(t, goCode)
 }
 
+func TestGreeterPipeline(t *testing.T) {
+	classPath := compileJavaFixture(t, "Greeter.java")
+	cf, err := classfile.ParseClassFilePath(classPath)
+	if err != nil {
+		t.Fatalf("parse Greeter.class: %v", err)
+	}
+
+	lowered, methods := lowerClassWithExceptions(t, cf)
+	runMethod := methods["run"]
+	if runMethod == nil {
+		t.Fatal("run()I was not lowered")
+	}
+	for _, op := range []ir.OpKind{
+		ir.OpConstString,
+		ir.OpConstClass,
+		ir.OpNewArray,
+		ir.OpANewArray,
+		ir.OpArrayStore,
+		ir.OpArrayLoad,
+		ir.OpArrayLength,
+		ir.OpInvokeVirtual,
+	} {
+		if !hasOp(runMethod.Instructions, op) {
+			t.Errorf("Greeter.run should contain %s", op)
+		}
+	}
+
+	goCode, err := codegen.GenerateGo(cf, lowered)
+	if err != nil {
+		t.Fatalf("generate Go: %v", err)
+	}
+	for _, want := range [][]byte{
+		[]byte("github.com/JohnEsleyer/barista/pkg/runtime/java/lang"),
+		[]byte("lang.NewString"),
+		[]byte("lang.NewClass"),
+		[]byte("make([]int32"),
+		[]byte("make([]*lang.String"),
+		[]byte("lang.ArrayStore"),
+		[]byte("lang.ArrayLoad"),
+		[]byte("lang.SystemOut"),
+		[]byte(".Println"),
+		[]byte("&lang.StringBuilder{}"),
+	} {
+		if !bytes.Contains(goCode, want) {
+			t.Errorf("generated Go does not contain %q:\n%s", want, goCode)
+		}
+	}
+
+	runGeneratedGreeter(t, goCode)
+}
+
+func TestTryCatchPipeline(t *testing.T) {
+	classPath := compileJavaFixture(t, "TryCatch.java")
+	cf, err := classfile.ParseClassFilePath(classPath)
+	if err != nil {
+		t.Fatalf("parse TryCatch.class: %v", err)
+	}
+
+	lowered, methods := lowerClassWithExceptions(t, cf)
+	runMethod := methods["run"]
+	if runMethod == nil {
+		t.Fatal("run(Z)I was not lowered")
+	}
+	if len(runMethod.ExceptionTraps) != 1 {
+		t.Fatalf("run has %d exception traps, want 1", len(runMethod.ExceptionTraps))
+	}
+	trap := runMethod.ExceptionTraps[0]
+	if trap.CatchClass != "java/lang/RuntimeException" {
+		t.Errorf("catch class = %q, want java/lang/RuntimeException", trap.CatchClass)
+	}
+	for _, op := range []ir.OpKind{ir.OpThrow, ir.OpLoadException} {
+		if !hasOp(runMethod.Instructions, op) {
+			t.Errorf("TryCatch.run should contain %s", op)
+		}
+	}
+
+	goCode, err := codegen.GenerateGo(cf, lowered)
+	if err != nil {
+		t.Fatalf("generate Go: %v", err)
+	}
+	for _, want := range [][]byte{
+		[]byte("defer func()"),
+		[]byte("recover()"),
+		[]byte("lang.MatchesException"),
+		[]byte("lang.AsThrowable"),
+		[]byte("goto L"),
+		[]byte("panic("),
+	} {
+		if !bytes.Contains(goCode, want) {
+			t.Errorf("generated Go does not contain %q:\n%s", want, goCode)
+		}
+	}
+
+	runGeneratedTryCatch(t, goCode)
+}
+
+func lowerClassWithExceptions(t *testing.T, cf *classfile.ClassFile) ([]*ir.MethodIR, map[string]*ir.MethodIR) {
+	t.Helper()
+	lowered := make([]*ir.MethodIR, 0, len(cf.Methods))
+	methods := make(map[string]*ir.MethodIR)
+	for _, m := range cf.Methods {
+		code := m.FindCode()
+		if code == nil {
+			continue
+		}
+		mir, err := ir.LowerMethodWithExceptions(cf.ConstantPool, cf.ThisClass, m.Name, m.Descriptor, code.Code, m.IsStatic(), code.ExceptionTable)
+		if err != nil {
+			t.Fatalf("lower %s: %v", m.Name, err)
+		}
+		lowered = append(lowered, mir)
+		methods[m.Name] = mir
+	}
+	return lowered, methods
+}
+
 func hasOp(insts []ir.Instruction, op ir.OpKind) bool {
 	for _, inst := range insts {
 		if inst.Op == op {
@@ -315,4 +431,85 @@ func TestGeneratedCounter(t *testing.T) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("generated object code failed to compile or run: %v\n%s\n--- generated source ---\n%s", err, output, goCode)
 	}
+}
+
+func writeGeneratedLangGoMod(t *testing.T, dir string) {
+	t.Helper()
+	root, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatalf("resolve repository root: %v", err)
+	}
+	content := fmt.Sprintf(`module generated
+
+go 1.24
+
+require github.com/JohnEsleyer/barista v0.0.0
+replace github.com/JohnEsleyer/barista => %s
+`, root)
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(content), 0644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+}
+
+func runGeneratedLangTest(t *testing.T, dir string, goCode []byte) {
+	t.Helper()
+	goTool, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("go toolchain is not available")
+	}
+	cmd := exec.Command(goTool, "test", "./...")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generated runtime-backed Go failed to compile or run: %v\n%s\n--- generated source ---\n%s", err, output, goCode)
+	}
+}
+
+func runGeneratedGreeter(t *testing.T, goCode []byte) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "greeter.go"), goCode, 0644); err != nil {
+		t.Fatalf("write generated Go: %v", err)
+	}
+	writeGeneratedLangGoMod(t, dir)
+	testSource := `package greeter
+
+import "testing"
+
+func TestGeneratedGreeter(t *testing.T) {
+	if got := Run(); got != 236 {
+		t.Errorf("Run() = %d, want 236", got)
+	}
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "greeter_test.go"), []byte(testSource), 0644); err != nil {
+		t.Fatalf("write generated Go test: %v", err)
+	}
+	runGeneratedLangTest(t, dir, goCode)
+}
+
+func runGeneratedTryCatch(t *testing.T, goCode []byte) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "trycatch.go"), goCode, 0644); err != nil {
+		t.Fatalf("write generated Go: %v", err)
+	}
+	writeGeneratedLangGoMod(t, dir)
+	testSource := `package trycatch
+
+import "testing"
+
+func TestGeneratedTryCatch(t *testing.T) {
+	if got := Run(false); got != 1 {
+		t.Errorf("Run(false) = %d, want 1", got)
+	}
+	if got := Run(true); got != 2 {
+		t.Errorf("Run(true) = %d, want 2", got)
+	}
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "trycatch_test.go"), []byte(testSource), 0644); err != nil {
+		t.Fatalf("write generated Go test: %v", err)
+	}
+	runGeneratedLangTest(t, dir, goCode)
 }

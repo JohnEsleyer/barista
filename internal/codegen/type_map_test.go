@@ -9,13 +9,16 @@ import (
 
 func TestDescriptorToGoType(t *testing.T) {
 	tests := map[string]string{
-		"I":                  "int32",
-		"J":                  "int64",
-		"Z":                  "bool",
-		"Ljava/lang/String;": "*JavaLangString",
-		"LCounter;":          "*Counter",
-		"[I":                 "[]int32",
-		"[[LCounter;":        "[][]*Counter",
+		"I":                         "int32",
+		"J":                         "int64",
+		"Z":                         "bool",
+		"Ljava/lang/String;":        "*lang.String",
+		"Ljava/lang/StringBuilder;": "*lang.StringBuilder",
+		"Ljava/lang/Object;":        "*lang.Object",
+		"LCounter;":                 "*Counter",
+		"[I":                        "[]int32",
+		"[Ljava/lang/String;":       "[]*lang.String",
+		"[[LCounter;":               "[][]*Counter",
 	}
 	for desc, want := range tests {
 		expr := DescriptorToGoType(desc)

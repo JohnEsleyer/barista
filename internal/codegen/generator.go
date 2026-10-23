@@ -15,6 +15,8 @@ import (
 	"github.com/JohnEsleyer/barista/internal/ir"
 )
 
+const langRuntimeImport = "github.com/JohnEsleyer/barista/pkg/runtime/java/lang"
+
 // GenerateGo translates a parsed ClassFile and lowered IR into clean Go code.
 func GenerateGo(cf *classfile.ClassFile, methods []*ir.MethodIR) ([]byte, error) {
 	file := &ast.File{
@@ -22,8 +24,18 @@ func GenerateGo(cf *classfile.ClassFile, methods []*ir.MethodIR) ([]byte, error)
 		Decls: make([]ast.Decl, 0),
 	}
 
-	if needsJavaLangString(cf, methods) {
-		file.Decls = append(file.Decls, javaLangStringDecl())
+	if needsLang(cf, methods) {
+		importSpec := &ast.ImportSpec{
+			Path: &ast.BasicLit{
+				Kind:  token.STRING,
+				Value: strconv.Quote(langRuntimeImport),
+			},
+		}
+		file.Imports = []*ast.ImportSpec{importSpec}
+		file.Decls = append(file.Decls, &ast.GenDecl{
+			Tok:   token.IMPORT,
+			Specs: []ast.Spec{importSpec},
+		})
 	}
 
 	file.Decls = append(file.Decls, buildClassStruct(cf))
@@ -109,303 +121,6 @@ func buildStaticFieldDecl(cf *classfile.ClassFile, field classfile.MemberInfo) *
 			},
 		},
 	}
-}
-
-func buildFuncDecl(cf *classfile.ClassFile, mir *ir.MethodIR, fnName string, methodNames map[string]string) (*ast.FuncDecl, error) {
-	md, err := ir.ParseMethodDescriptor(mir.Descriptor)
-	if err != nil {
-		return nil, fmt.Errorf("method %s: %w", mir.Name, err)
-	}
-
-	startSlot := 0
-	if !mir.IsStatic {
-		startSlot = 1
-	}
-
-	params := make([]*ast.Field, 0, len(md.Params))
-	declared := make(map[string]bool)
-	if !mir.IsStatic {
-		declared["this"] = true
-	}
-
-	slot := startSlot
-	for _, param := range md.Params {
-		name := fmt.Sprintf("local_%d", slot)
-		declared[name] = true
-		params = append(params, &ast.Field{
-			Names: []*ast.Ident{ast.NewIdent(name)},
-			Type:  descriptorOrAny(param),
-		})
-		slot += descriptorSlots(param)
-	}
-
-	fnDecl := &ast.FuncDecl{
-		Name: ast.NewIdent(fnName),
-		Type: &ast.FuncType{
-			Params: &ast.FieldList{List: params},
-		},
-		Body: &ast.BlockStmt{List: make([]ast.Stmt, 0)},
-	}
-	if !mir.IsStatic {
-		fnDecl.Recv = &ast.FieldList{
-			List: []*ast.Field{
-				{
-					Names: []*ast.Ident{ast.NewIdent("this")},
-					Type:  &ast.StarExpr{X: ast.NewIdent(CleanClassName(cf.ThisClass))},
-				},
-			},
-		}
-	}
-	if md.Return != "V" {
-		fnDecl.Type.Results = &ast.FieldList{
-			List: []*ast.Field{{Type: descriptorOrAny(md.Return)}},
-		}
-	}
-
-	branchy := false
-	for _, inst := range mir.Instructions {
-		if inst.Op == ir.OpLabel || inst.Op == ir.OpGoto || inst.Op == ir.OpBranch {
-			branchy = true
-			break
-		}
-	}
-	if branchy {
-		emitPredeclarations(fnDecl.Body, mir, startSlot, md.ParamSlots, declared)
-	}
-
-	var pendingLabels []int
-	appendStmt := func(stmt ast.Stmt) {
-		for i := len(pendingLabels) - 1; i >= 0; i-- {
-			stmt = &ast.LabeledStmt{
-				Label: ast.NewIdent(fmt.Sprintf("L%d", pendingLabels[i])),
-				Stmt:  stmt,
-			}
-		}
-		pendingLabels = nil
-		fnDecl.Body.List = append(fnDecl.Body.List, stmt)
-	}
-
-	for _, inst := range mir.Instructions {
-		switch inst.Op {
-		case ir.OpConstInt:
-			if inst.Result == nil {
-				return nil, fmt.Errorf("CONST_INT without a result in %s", mir.Name)
-			}
-			valueExpr := ast.Expr(&ast.BasicLit{
-				Kind:  token.INT,
-				Value: strconv.FormatInt(int64(inst.Constant), 10),
-			})
-			// In branchless methods the SSA value is introduced with :=, so a
-			// plain literal would infer Go's int instead of int32. In branchy
-			// methods emitPredeclarations already fixed the type.
-			if !declared[inst.Result.String()] {
-				valueExpr = &ast.CallExpr{
-					Fun:  ast.NewIdent("int32"),
-					Args: []ast.Expr{valueExpr},
-				}
-			}
-			appendStmt(assignStmt(inst.Result.String(), valueExpr, declared))
-
-		case ir.OpLoadVar:
-			if inst.Result == nil {
-				return nil, fmt.Errorf("LOAD_VAR without a result in %s", mir.Name)
-			}
-			localName := fmt.Sprintf("local_%d", inst.LocalVar)
-			if !mir.IsStatic && inst.LocalVar == 0 {
-				localName = "this"
-			}
-			appendStmt(assignStmt(inst.Result.String(), ast.NewIdent(localName), declared))
-
-		case ir.OpStoreVar:
-			if len(inst.Args) != 1 {
-				return nil, fmt.Errorf("STORE_VAR without a value in %s", mir.Name)
-			}
-			localName := fmt.Sprintf("local_%d", inst.LocalVar)
-			if !mir.IsStatic && inst.LocalVar == 0 {
-				localName = "this"
-			}
-			appendStmt(assignStmt(localName, ast.NewIdent(inst.Args[0].String()), declared))
-
-		case ir.OpAdd, ir.OpSub, ir.OpMul, ir.OpDiv:
-			if len(inst.Args) != 2 || inst.Result == nil {
-				return nil, fmt.Errorf("binary operation with invalid operands in %s", mir.Name)
-			}
-			appendStmt(assignStmt(inst.Result.String(), &ast.BinaryExpr{
-				X:  ast.NewIdent(inst.Args[0].String()),
-				Op: binaryToken(inst.Op),
-				Y:  ast.NewIdent(inst.Args[1].String()),
-			}, declared))
-
-		case ir.OpNeg:
-			if len(inst.Args) != 1 || inst.Result == nil {
-				return nil, fmt.Errorf("NEG with invalid operands in %s", mir.Name)
-			}
-			appendStmt(assignStmt(inst.Result.String(), &ast.UnaryExpr{
-				Op: token.SUB,
-				X:  ast.NewIdent(inst.Args[0].String()),
-			}, declared))
-
-		case ir.OpLabel:
-			pendingLabels = append(pendingLabels, inst.Label)
-
-		case ir.OpGoto:
-			appendStmt(&ast.BranchStmt{
-				Tok:   token.GOTO,
-				Label: ast.NewIdent(fmt.Sprintf("L%d", inst.Target)),
-			})
-
-		case ir.OpBranch:
-			cond, err := branchExpr(inst)
-			if err != nil {
-				return nil, fmt.Errorf("method %s: %w", mir.Name, err)
-			}
-			appendStmt(&ast.IfStmt{
-				Cond: cond,
-				Body: &ast.BlockStmt{List: []ast.Stmt{
-					&ast.BranchStmt{
-						Tok:   token.GOTO,
-						Label: ast.NewIdent(fmt.Sprintf("L%d", inst.Target)),
-					},
-				}},
-			})
-
-		case ir.OpNew:
-			if inst.Result == nil || inst.OwnerClass == "" {
-				return nil, fmt.Errorf("NEW with invalid metadata in %s", mir.Name)
-			}
-			appendStmt(assignStmt(inst.Result.String(), &ast.UnaryExpr{
-				Op: token.AND,
-				X: &ast.CompositeLit{
-					Type: ast.NewIdent(CleanClassName(inst.OwnerClass)),
-				},
-			}, declared))
-
-		case ir.OpGetField:
-			if inst.Result == nil || len(inst.Args) != 1 {
-				return nil, fmt.Errorf("GET_FIELD with invalid operands in %s", mir.Name)
-			}
-			if inst.OwnerClass != "" && inst.OwnerClass != cf.ThisClass {
-				return nil, fmt.Errorf("GET_FIELD %s.%s refers to external class %s; only single-class field access is supported yet", inst.OwnerClass, inst.MemberName, inst.OwnerClass)
-			}
-			appendStmt(assignStmt(inst.Result.String(), &ast.SelectorExpr{
-				X:   ast.NewIdent(inst.Args[0].String()),
-				Sel: ast.NewIdent(CleanMemberName(inst.MemberName)),
-			}, declared))
-
-		case ir.OpPutField:
-			if len(inst.Args) != 2 {
-				return nil, fmt.Errorf("PUT_FIELD with invalid operands in %s", mir.Name)
-			}
-			if inst.OwnerClass != "" && inst.OwnerClass != cf.ThisClass {
-				return nil, fmt.Errorf("PUT_FIELD %s.%s refers to external class %s; only single-class field access is supported yet", inst.OwnerClass, inst.MemberName, inst.OwnerClass)
-			}
-			appendStmt(&ast.AssignStmt{
-				Lhs: []ast.Expr{
-					&ast.SelectorExpr{
-						X:   ast.NewIdent(inst.Args[0].String()),
-						Sel: ast.NewIdent(CleanMemberName(inst.MemberName)),
-					},
-				},
-				Tok: token.ASSIGN,
-				Rhs: []ast.Expr{ast.NewIdent(inst.Args[1].String())},
-			})
-
-		case ir.OpGetStatic:
-			if inst.Result == nil {
-				return nil, fmt.Errorf("GET_STATIC without a result in %s", mir.Name)
-			}
-			if inst.OwnerClass != "" && inst.OwnerClass != cf.ThisClass {
-				return nil, fmt.Errorf("GET_STATIC %s.%s refers to external class %s; only single-class static state is supported yet", inst.OwnerClass, inst.MemberName, inst.OwnerClass)
-			}
-			appendStmt(assignStmt(inst.Result.String(), ast.NewIdent(
-				staticFieldName(inst.OwnerClass, inst.MemberName),
-			), declared))
-
-		case ir.OpPutStatic:
-			if len(inst.Args) != 1 {
-				return nil, fmt.Errorf("PUT_STATIC without a value in %s", mir.Name)
-			}
-			if inst.OwnerClass != "" && inst.OwnerClass != cf.ThisClass {
-				return nil, fmt.Errorf("PUT_STATIC %s.%s refers to external class %s; only single-class static state is supported yet", inst.OwnerClass, inst.MemberName, inst.OwnerClass)
-			}
-			appendStmt(&ast.AssignStmt{
-				Lhs: []ast.Expr{ast.NewIdent(staticFieldName(inst.OwnerClass, inst.MemberName))},
-				Tok: token.ASSIGN,
-				Rhs: []ast.Expr{ast.NewIdent(inst.Args[0].String())},
-			})
-
-		case ir.OpInvokeVirtual, ir.OpInvokeSpecial:
-			if len(inst.Args) == 0 {
-				return nil, fmt.Errorf("method invocation without a receiver in %s", mir.Name)
-			}
-			// java/lang/Object has no generated body. The allocation already
-			// produced a zeroed Go struct, so Object.<init> is a no-op. Keep a
-			// blank use so the receiver SSA value does not become unused.
-			if inst.OwnerClass == "java/lang/Object" && inst.MemberName == "<init>" {
-				appendStmt(&ast.AssignStmt{
-					Lhs: []ast.Expr{ast.NewIdent("_")},
-					Tok: token.ASSIGN,
-					Rhs: []ast.Expr{ast.NewIdent(inst.Args[0].String())},
-				})
-				continue
-			}
-			if inst.OwnerClass == "java/lang/Object" {
-				return nil, fmt.Errorf("java/lang/Object.%s is not supported yet", inst.MemberName)
-			}
-			if inst.OwnerClass != "" && inst.OwnerClass != cf.ThisClass {
-				return nil, fmt.Errorf("%s on external class %s is not supported yet; only single-class dispatch is implemented", inst.MemberName, inst.OwnerClass)
-			}
-			callName := resolveMethodName(methodNames, inst.OwnerClass, inst.MemberName, inst.Descriptor)
-			call := &ast.CallExpr{
-				Fun: &ast.SelectorExpr{
-					X:   ast.NewIdent(inst.Args[0].String()),
-					Sel: ast.NewIdent(callName),
-				},
-				Args: make([]ast.Expr, 0, len(inst.Args)-1),
-			}
-			for _, arg := range inst.Args[1:] {
-				call.Args = append(call.Args, ast.NewIdent(arg.String()))
-			}
-			if inst.Result != nil {
-				appendStmt(assignStmt(inst.Result.String(), call, declared))
-			} else {
-				appendStmt(&ast.ExprStmt{X: call})
-			}
-
-		case ir.OpInvokeStatic:
-			if inst.OwnerClass != "" && inst.OwnerClass != cf.ThisClass {
-				return nil, fmt.Errorf("static call %s.%s refers to external class %s; only single-class dispatch is implemented", inst.OwnerClass, inst.MemberName, inst.OwnerClass)
-			}
-			callName := resolveMethodName(methodNames, inst.OwnerClass, inst.MemberName, inst.Descriptor)
-			call := &ast.CallExpr{
-				Fun:  ast.NewIdent(callName),
-				Args: make([]ast.Expr, 0, len(inst.Args)),
-			}
-			for _, arg := range inst.Args {
-				call.Args = append(call.Args, ast.NewIdent(arg.String()))
-			}
-			if inst.Result != nil {
-				appendStmt(assignStmt(inst.Result.String(), call, declared))
-			} else {
-				appendStmt(&ast.ExprStmt{X: call})
-			}
-
-		case ir.OpReturn:
-			retStmt := &ast.ReturnStmt{}
-			if len(inst.Args) > 0 {
-				retStmt.Results = []ast.Expr{ast.NewIdent(inst.Args[0].String())}
-			}
-			appendStmt(retStmt)
-
-		default:
-			return nil, fmt.Errorf("unhandled IR opcode %s in %s", inst.Op, mir.Name)
-		}
-	}
-
-	if len(pendingLabels) != 0 {
-		return nil, fmt.Errorf("method %s ends with an unbound label", mir.Name)
-	}
-	return fnDecl, nil
 }
 
 // emitPredeclarations emits var declarations for every SSA value and local used
@@ -541,11 +256,26 @@ func branchExpr(inst ir.Instruction) (ast.Expr, error) {
 	tok := branchToken(inst.Condition)
 	left := ast.NewIdent(inst.Args[0].String())
 	if len(inst.Args) == 1 {
+		if inst.Args[0].Type == "Z" {
+			switch inst.Condition {
+			case ir.CondEQ:
+				return &ast.UnaryExpr{Op: token.NOT, X: left}, nil
+			case ir.CondNE:
+				return left, nil
+			default:
+				return nil, fmt.Errorf("boolean branch cannot use condition %s", inst.Condition)
+			}
+		}
 		return &ast.BinaryExpr{
 			X:  left,
 			Op: tok,
 			Y:  &ast.BasicLit{Kind: token.INT, Value: "0"},
 		}, nil
+	}
+	if inst.Args[0].Type == "Z" || inst.Args[1].Type == "Z" {
+		if inst.Condition != ir.CondEQ && inst.Condition != ir.CondNE {
+			return nil, fmt.Errorf("boolean branch cannot use condition %s", inst.Condition)
+		}
 	}
 	return &ast.BinaryExpr{
 		X:  left,
@@ -610,48 +340,6 @@ func resolveMethodName(names map[string]string, owner, name, descriptor string) 
 		return "Init"
 	}
 	return exportedName(name)
-}
-
-func needsJavaLangString(cf *classfile.ClassFile, methods []*ir.MethodIR) bool {
-	for _, field := range cf.Fields {
-		if strings.Contains(field.Descriptor, "Ljava/lang/String;") {
-			return true
-		}
-	}
-	for _, mir := range methods {
-		md, err := ir.ParseMethodDescriptor(mir.Descriptor)
-		if err != nil {
-			continue
-		}
-		if strings.Contains(md.Return, "Ljava/lang/String;") {
-			return true
-		}
-		for _, param := range md.Params {
-			if strings.Contains(param, "Ljava/lang/String;") {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func javaLangStringDecl() *ast.GenDecl {
-	return &ast.GenDecl{
-		Tok: token.TYPE,
-		Specs: []ast.Spec{
-			&ast.TypeSpec{
-				Name: ast.NewIdent("JavaLangString"),
-				Type: &ast.StructType{
-					Fields: &ast.FieldList{List: []*ast.Field{
-						{
-							Names: []*ast.Ident{ast.NewIdent("Value")},
-							Type:  ast.NewIdent("string"),
-						},
-					}},
-				},
-			},
-		},
-	}
 }
 
 func packageName(internalName string) string {

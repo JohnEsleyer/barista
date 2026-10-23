@@ -3,8 +3,8 @@
 This is the canonical tracker for Barista's implementation progress. Update it at the end of every meaningful change so a new contributor can understand what works, what does not, and what comes next without reading the entire commit history.
 
 **Last updated:** 2026-10-23
-**Current phase:** Phase 2 complete; Phase 3 next
-**Latest implementation commit:** `e17b3cd` — Implement Phase 2 objects, fields, dispatch, and CFG
+**Current phase:** Phase 3 complete; Phase 4 next
+**Latest implementation commit:** `PENDING` — Implement Phase 3 runtime, strings, arrays, and exceptions
 
 ---
 
@@ -16,19 +16,20 @@ This is the canonical tracker for Barista's implementation progress. Update it a
 | Vet | Passing | `go vet ./...` |
 | Tests | Passing | `go test ./...` |
 | Race detector | Passing | `go test -race ./...` |
-| Class-file parsing | Complete for Phase 2 | `internal/classfile` |
-| IR lowering | Complete for Phase 2 | `internal/ir` |
-| Control flow graph | Basic blocks, edges, predecessors, and successors | `internal/ir/block.go` |
-| Go code generation | Objects, fields, dispatch, CFG-safe branching | `internal/codegen` |
-| CLI | `grind` and `brew` work for Phase 2 classes; `serve` is a stub | `cmd/barista` |
-| End-to-end fixtures | Calculator and Counter compile, generate Go, compile, and run | `tests/integration_test.go` |
+| Class-file parsing | Complete for Phase 3 | `internal/classfile` |
+| IR lowering | Complete for Phase 3 | `internal/ir` |
+| Control flow graph | Basic blocks, edges, predecessors, and successors; exception traps are separate metadata | `internal/ir/block.go` |
+| Go code generation | Objects, fields, dispatch, strings, arrays, exception dispatch, CFG-safe branching | `internal/codegen` |
+| Runtime shims | `Object`, `String`, `StringBuilder`, `Throwable`/`Exception`, `System`, arrays | `pkg/runtime/java/lang` |
+| CLI | `grind` and `brew` work for Phase 3 classes; `serve` is a stub | `cmd/barista` |
+| End-to-end fixtures | Calculator, Counter, Greeter, and TryCatch compile, generate Go, compile, and run | `tests/integration_test.go` |
 
-The integration suite now has two end-to-end fixtures:
+The integration suite now has four end-to-end fixtures:
 
 - `Calculator.java` proves static `int` arithmetic, conditionals, and loops.
 - `Counter.java` proves constructors, instance and static fields, `new`/`dup`, `invokespecial`, `invokevirtual`, `invokestatic`, `<clinit>`, static initialization, and generated pointer-receiver methods.
-
-The generated Counter module is compiled and executed with assertions for field reads/writes, increments, constructors, static state, and dispatches.
+- `Greeter.java` proves string constants and methods, `StringBuilder`, `System.out.println`, class literals, `newarray`, `anewarray`, `arraylength`, and array load/store.
+- `TryCatch.java` proves exception-table lowering, `athrow`, Go `panic`/`recover`, catch-type matching, handler dispatch, and `Throwable.getMessage`.
 
 ---
 
@@ -72,13 +73,22 @@ The generated Counter module is compiled and executed with assertions for field 
 - [x] Object-oriented integration fixture
 - [ ] PHI/stack-merge support at branch targets (deferred; branch targets must still have an empty operand stack)
 
-### Phase 3 — Runtime & Exceptions: Next
+### Phase 3 — Runtime & Exceptions: Complete
 
-- [ ] Exception-table lowering to `panic` / `recover`
-- [ ] `java.lang.String` and `StringBuilder` runtime shims
-- [ ] `newarray`, `anewarray`, and array opcodes
-- [ ] Runtime fixture for strings, arrays, and caught exceptions
-- [ ] Replace the generated `JavaLangString` type placeholder with the real runtime wrapper
+- [x] Exception-table parsing and lowering into `MethodIR.ExceptionTraps`
+- [x] `athrow` lowered to Go `panic`
+- [x] Protected ranges wrapped in recover closures with `handlerPC` dispatch
+- [x] Catch-type matching for the standard `java.lang` exception hierarchy
+- [x] `java.lang.String` and `StringBuilder` runtime shims
+- [x] `java.lang.Object`, `Throwable`, `Exception`, `RuntimeException`, `NullPointerException`, and `IndexOutOfBoundsException` shims
+- [x] `System.out` / `System.err` `PrintStream` shim and `System.currentTimeMillis`
+- [x] `newarray`, `anewarray`, `arraylength`, `iaload`, `iastore`, `aaload`, and `aastore`
+- [x] `ldc` / `ldc_w` support for String, integer, and class constants
+- [x] `aconst_null`, `pop`, and bounds-checked array helpers
+- [x] Replace the generated `JavaLangString` placeholder with `*lang.String`
+- [x] Runtime-backed `Greeter.java` and `TryCatch.java` fixtures
+- [ ] User-defined exception classes and `finally` / overlapping / nested trap lowering (deferred)
+- [ ] Returns inside a protected range or branches out of a protected range (deferred)
 
 ### Phase 4 — Kotlin Engine: Planned
 
@@ -111,26 +121,32 @@ The generated Counter module is compiled and executed with assertions for field 
 - Parse JVM method descriptors, including primitive, reference, and array parameters, return types, and local-slot widths.
 - Lower integer loads/stores, constants, arithmetic, negation, `iinc`, conditionals, `goto`, and `goto_w`.
 - Lower `new`, `dup`, `getfield`, `putfield`, `getstatic`, `putstatic`, `invokevirtual`, `invokespecial`, and `invokestatic`.
+- Lower `ldc` / `ldc_w` integer, String, and class constants.
+- Lower `newarray`, `anewarray`, `arraylength`, `iaload`, `iastore`, `aaload`, and `aastore` to Go slices and bounds-checked runtime helpers.
+- Lower `athrow` and JVM exception tables into Go `panic` / `recover` dispatch for standard runtime exceptions.
+- Resolve `java/lang/String`, `StringBuilder`, `Object`, `Throwable`, `Exception`, `RuntimeException`, `NullPointerException`, `IndexOutOfBoundsException`, `Class`, and `java/io/PrintStream` to native Go shims.
 - Split methods into basic blocks with bytecode ranges, instructions, predecessors, successors, and an entry block.
 - Lower `<init>` and `<clinit>` into generated constructor and package `init` functions.
 - Generate Go structs for instance fields and package-level variables for static fields.
 - Generate pointer-receiver methods for instance methods and package functions for static methods.
 - Emit formatted Go to stdout or a file.
-- Print method IR and CFG edges with `barista grind`.
+- Print method IR, exception traps, and CFG edges with `barista grind`.
 
 ---
 
 ## Known Limitations
 
-These are intentionally out of scope for Phase 2, but should be visible to avoid false expectations:
+These are intentionally out of scope for Phase 3, but should be visible to avoid false expectations:
 
 - `.jar` archive input is not implemented; the CLI accepts a single `.class` file.
-- Only one class is compiled at a time. Cross-class field access, static calls, virtual calls, inheritance, and interface dispatch are rejected with an explicit diagnostic. The only external call currently handled is `java/lang/Object.<init>`, which is a no-op after Go allocation.
-- Only nominal `int` lowering is implemented. `long`, `float`, `double`, `boolean`, `byte`, `char`, and `short` appear in type mapping and descriptors, but their arithmetic/load opcodes are not lowered.
+- Only one class is compiled at a time. Cross-class field access, static calls, virtual calls, inheritance, and interface dispatch are rejected with an explicit diagnostic. Runtime class calls are supported only for the native shims listed above.
+- Only nominal `int` arithmetic is lowered. `long`, `float`, `double`, `byte`, `char`, and `short` appear in type mapping and descriptors, but their arithmetic and array opcodes are not lowered. `boolean` parameters and fields are supported through `iload`/`istore` type inference.
 - Branch targets must have an empty operand stack. There are no PHI nodes or stack-merge values yet.
-- No arrays, strings, exceptions, or runtime shims are lowered yet. A minimal `JavaLangString` struct is emitted only when a field or method signature references `Ljava/lang/String;`, so such code can compile, but no String operations are supported.
-- No `tableswitch`, `lookupswitch`, `wide`, `invokeinterface`, or `invokedynamic`.
-- No `aconst_null`, `checkcast`, `instanceof`, or array opcodes.
+- Exception support covers the standard runtime hierarchy and simple protected ranges. User-defined exception classes, `finally`, overlapping or nested trap ranges, returns inside a protected range, and branches out of a protected range are not supported.
+- Go panics that are not Barista runtime exceptions (for example a nil generated pointer) are re-panicked rather than matched to a JVM catch type.
+- String and StringBuilder support is intentionally small: length, equality, substring, concat, char access, append, and toString. Other JDK methods are rejected.
+- `aconst_null` is represented as Go `any`; it works for runtime calls and `any` contexts but is not yet context-typed for assignment to a specific reference field or array.
+- No `tableswitch`, `lookupswitch`, `wide`, `invokeinterface`, `invokedynamic`, `checkcast`, or `instanceof`.
 - Go identifier collisions after export casing (for example JVM fields `foo` and `Foo`) are not resolved; such a class will produce invalid Go rather than a diagnostic.
 - Generated methods are still linear SSA with labels and `goto`; the CFG is currently an analysis artifact and is not used for structured control-flow reconstruction.
 - `brew` emits source only; it does not invoke `go build` or produce a linked binary yet.
@@ -158,23 +174,26 @@ Manual CLI check:
 go build -o bin/barista ./cmd/barista
 javac -d tests/fixtures/out tests/fixtures/java/Calculator.java
 javac -d tests/fixtures/out tests/fixtures/java/Counter.java
+javac -d tests/fixtures/out tests/fixtures/java/Greeter.java
+javac -d tests/fixtures/out tests/fixtures/java/TryCatch.java
 ./bin/barista grind tests/fixtures/out/Counter.class
+./bin/barista grind tests/fixtures/out/TryCatch.class
 ./bin/barista brew -o out/counter.go tests/fixtures/out/Counter.class
+./bin/barista brew -o out/greeter.go tests/fixtures/out/Greeter.class
 ```
 
-`grind` prints the IR, a CFG block count, and each block's bytecode range and successors. `brew` emits a Go source file containing the class struct, static fields, constructor, instance methods, and static methods.
+`grind` prints the IR, exception traps, a CFG block count, and each block's bytecode range and successors. `brew` emits a Go source file containing the class struct, static fields, constructor, instance methods, static methods, runtime shim calls, array operations, and exception dispatch. Generated runtime-backed modules must be built in a module that can resolve `github.com/JohnEsleyer/barista/pkg/runtime/java/lang`; the integration suite supplies a `require`/`replace` pair automatically.
 
 ---
 
 ## Next Task
 
-Implement Phase 3 starting with the smallest end-to-end slice:
+Begin Phase 4 with the smallest Kotlin-capable end-to-end slice:
 
-1. Add `newarray` / `anewarray` and the integer array load/store opcodes.
-2. Introduce the `pkg/runtime/java/lang` String wrapper and replace the generated placeholder.
-3. Lower exception tables to `panic` / `recover` with a fixture that catches and rethrows.
-4. Add an integration fixture that uses an array, a String, and a caught exception.
-5. Update this file and add a case study for any non-obvious issue encountered.
+1. Add `tableswitch` and `lookupswitch` lowering to labels and a Kotlin or Java fixture.
+2. Add `kotlin.jvm.internal.Intrinsics` null-check and assertion runtime shims.
+3. Add cross-class dispatch or a small generated-stdlib bridge so Kotlin fixture calls can resolve beyond the runtime package.
+4. Record any new non-obvious findings as case studies and update this tracker.
 
 ---
 
@@ -188,11 +207,14 @@ Implement Phase 3 starting with the smallest end-to-end slice:
 | 2026-10-23 | Implemented Phase 1 classfile parsing, IR lowering, codegen, CLI, and tests | `10fbff6` |
 | 2026-10-23 | Added the canonical development progress tracker | `841af41` |
 | 2026-10-23 | Implemented Phase 2 objects, fields, dispatch, descriptors, and CFG | `e17b3cd` |
+| 2026-10-23 | Implemented Phase 3 runtime shims, strings, arrays, exception dispatch, and `ldc` constants | `PENDING` |
 
 ## Related Records
 
 - [AI agent conventions](conventions.md)
 - [Case study index](case-studies/README.md)
+- [Go recover/handler dispatch case study](case-studies/2026-10-23-go-recover-handler-dispatch.md)
+- [JVM boolean iload case study](case-studies/2026-10-23-jvm-boolean-iload.md)
 - [JVM branch offset case study](case-studies/2026-10-23-jvm-branch-offset-origin.md)
 - [Go goto/declaration case study](case-studies/2026-10-23-go-goto-over-declarations.md)
 - [Go untyped integer constant case study](case-studies/2026-10-23-go-untyped-integer-constants.md)

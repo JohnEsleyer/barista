@@ -95,7 +95,7 @@ func runGrind(args []string, stdout io.Writer) error {
 		if code == nil {
 			continue
 		}
-		mir, err := ir.LowerMethod(cf.ConstantPool, cf.ThisClass, m.Name, m.Descriptor, code.Code, m.IsStatic())
+		mir, err := ir.LowerMethodWithExceptions(cf.ConstantPool, cf.ThisClass, m.Name, m.Descriptor, code.Code, m.IsStatic(), code.ExceptionTable)
 		if err != nil {
 			fmt.Fprintf(stdout, "Method %s%s: [Lowering Error: %v]\n\n", m.Name, m.Descriptor, err)
 			continue
@@ -103,6 +103,12 @@ func runGrind(args []string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "Method %s%s:\n", m.Name, m.Descriptor)
 		for _, inst := range mir.Instructions {
 			fmt.Fprintf(stdout, "    %s\n", inst)
+		}
+		if len(mir.ExceptionTraps) > 0 {
+			fmt.Fprintln(stdout, "    Exception traps:")
+			for _, trap := range mir.ExceptionTraps {
+				fmt.Fprintf(stdout, "        [%d,%d) -> pc %d catch %s\n", trap.StartPC, trap.EndPC, trap.HandlerPC, trap.CatchClass)
+			}
 		}
 		if mir.CFG != nil {
 			fmt.Fprintf(stdout, "    CFG: %d blocks, entry %s\n", len(mir.CFG.Blocks), mir.CFG.Entry.Label())
@@ -151,7 +157,7 @@ func runBrew(args []string, stdout io.Writer) error {
 		if code == nil {
 			continue
 		}
-		mir, err := ir.LowerMethod(cf.ConstantPool, cf.ThisClass, m.Name, m.Descriptor, code.Code, m.IsStatic())
+		mir, err := ir.LowerMethodWithExceptions(cf.ConstantPool, cf.ThisClass, m.Name, m.Descriptor, code.Code, m.IsStatic(), code.ExceptionTable)
 		if err != nil {
 			return fmt.Errorf("failed compiling method %s: %w", m.Name, err)
 		}

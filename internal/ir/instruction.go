@@ -28,6 +28,18 @@ const (
 	OpInvokeVirtual
 	OpInvokeStatic
 	OpInvokeSpecial
+
+	// Phase 3: strings, arrays, and exceptions.
+	OpConstString
+	OpConstClass
+	OpConstNull
+	OpNewArray
+	OpANewArray
+	OpArrayLength
+	OpArrayLoad
+	OpArrayStore
+	OpThrow
+	OpLoadException
 )
 
 func (k OpKind) String() string {
@@ -72,6 +84,26 @@ func (k OpKind) String() string {
 		return "INVOKE_STATIC"
 	case OpInvokeSpecial:
 		return "INVOKE_SPECIAL"
+	case OpConstString:
+		return "CONST_STRING"
+	case OpConstClass:
+		return "CONST_CLASS"
+	case OpConstNull:
+		return "CONST_NULL"
+	case OpNewArray:
+		return "NEW_ARRAY"
+	case OpANewArray:
+		return "ANEW_ARRAY"
+	case OpArrayLength:
+		return "ARRAY_LENGTH"
+	case OpArrayLoad:
+		return "ARRAY_LOAD"
+	case OpArrayStore:
+		return "ARRAY_STORE"
+	case OpThrow:
+		return "THROW"
+	case OpLoadException:
+		return "LOAD_EXCEPTION"
 	default:
 		return fmt.Sprintf("UNKNOWN_OP(%d)", k)
 	}
@@ -196,6 +228,24 @@ func (inst Instruction) String() string {
 			return fmt.Sprintf("%s = %s%s%s(%v) [%s]", inst.Result, recv, inst.MemberName, inst.Descriptor, callArgs, inst.OwnerClass)
 		}
 		return fmt.Sprintf("%s%s%s(%v) [%s]", recv, inst.MemberName, inst.Descriptor, callArgs, inst.OwnerClass)
+	case OpConstString:
+		return fmt.Sprintf("%s = %q", inst.Result, inst.Descriptor)
+	case OpConstClass:
+		return fmt.Sprintf("%s = class %s", inst.Result, inst.Descriptor)
+	case OpConstNull:
+		return fmt.Sprintf("%s = null", inst.Result)
+	case OpNewArray, OpANewArray:
+		return fmt.Sprintf("%s = new %s[%s]", inst.Result, inst.Descriptor, inst.Args[0])
+	case OpArrayLength:
+		return fmt.Sprintf("%s = len(%s)", inst.Result, inst.Args[0])
+	case OpArrayLoad:
+		return fmt.Sprintf("%s = %s[%s]", inst.Result, inst.Args[0], inst.Args[1])
+	case OpArrayStore:
+		return fmt.Sprintf("%s[%s] = %s", inst.Args[0], inst.Args[1], inst.Args[2])
+	case OpThrow:
+		return fmt.Sprintf("throw %s", inst.Args[0])
+	case OpLoadException:
+		return fmt.Sprintf("%s = <caught exception>", inst.Result)
 	default:
 		return fmt.Sprintf("%s (?)", inst.Op)
 	}
@@ -216,14 +266,25 @@ func binarySymbol(op OpKind) string {
 	}
 }
 
+// ExceptionTrap describes one protected bytecode range and its catch target.
+// CatchClass is an internal JVM class name; CatchType 0 is normalized to
+// java/lang/Throwable for catch-all handlers.
+type ExceptionTrap struct {
+	StartPC    int
+	EndPC      int
+	HandlerPC  int
+	CatchClass string
+}
+
 // MethodIR holds the lowered SSA instructions for a method.
 type MethodIR struct {
-	OwnerClass   string
-	Name         string
-	Descriptor   string
-	Instructions []Instruction
-	CFG          *ControlFlowGraph
-	ParamCount   int
-	HasReturnVal bool
-	IsStatic     bool
+	OwnerClass     string
+	Name           string
+	Descriptor     string
+	Instructions   []Instruction
+	CFG            *ControlFlowGraph
+	ExceptionTraps []ExceptionTrap
+	ParamCount     int
+	HasReturnVal   bool
+	IsStatic       bool
 }
