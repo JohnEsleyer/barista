@@ -4,7 +4,7 @@ This is the canonical tracker for Barista's implementation progress. Update it a
 
 **Last updated:** 2026-10-23
 **Current phase:** Phase 2 complete; Phase 3 next
-**Latest implementation commit:** Phase 2 implementation commit (see `git log --oneline`)
+**Latest implementation commit:** `e17b3cd` — Implement Phase 2 objects, fields, dispatch, and CFG
 
 ---
 
@@ -115,7 +115,6 @@ The generated Counter module is compiled and executed with assertions for field 
 - Lower `<init>` and `<clinit>` into generated constructor and package `init` functions.
 - Generate Go structs for instance fields and package-level variables for static fields.
 - Generate pointer-receiver methods for instance methods and package functions for static methods.
-- Resolve same-class method overloads by constant-pool descriptor.
 - Emit formatted Go to stdout or a file.
 - Print method IR and CFG edges with `barista grind`.
 
@@ -132,6 +131,7 @@ These are intentionally out of scope for Phase 2, but should be visible to avoid
 - No arrays, strings, exceptions, or runtime shims are lowered yet. A minimal `JavaLangString` struct is emitted only when a field or method signature references `Ljava/lang/String;`, so such code can compile, but no String operations are supported.
 - No `tableswitch`, `lookupswitch`, `wide`, `invokeinterface`, or `invokedynamic`.
 - No `aconst_null`, `checkcast`, `instanceof`, or array opcodes.
+- Go identifier collisions after export casing (for example JVM fields `foo` and `Foo`) are not resolved; such a class will produce invalid Go rather than a diagnostic.
 - Generated methods are still linear SSA with labels and `goto`; the CFG is currently an analysis artifact and is not used for structured control-flow reconstruction.
 - `brew` emits source only; it does not invoke `go build` or produce a linked binary yet.
 - `serve` is not implemented.
@@ -187,7 +187,7 @@ Implement Phase 3 starting with the smallest end-to-end slice:
 | 2026-10-23 | Established AI-agent case-study conventions | `af8801a` |
 | 2026-10-23 | Implemented Phase 1 classfile parsing, IR lowering, codegen, CLI, and tests | `10fbff6` |
 | 2026-10-23 | Added the canonical development progress tracker | `841af41` |
-| 2026-10-23 | Implemented Phase 2 objects, fields, dispatch, descriptors, and CFG | Phase 2 implementation commit |
+| 2026-10-23 | Implemented Phase 2 objects, fields, dispatch, descriptors, and CFG | `e17b3cd` |
 
 ## Related Records
 
