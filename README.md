@@ -6,9 +6,9 @@
 
 # Barista
 
-> **Write Kotlin or Java. Ship a Go binary.**
+> **Write Kotlin or Java. Ship a native Go binary.**
 >
-> Barista is a Barista-first application framework and ahead-of-time language frontend. It lets you write new backend services in Kotlin or Java syntax, against a curated SDK, and compile them into a single static Go binary with no JVM at runtime.
+> Barista is an ahead-of-time compiler and lightweight application framework. It lets you build high-performance backend services using expressive Kotlin or Java syntax and compiles them directly into single, static Go executables—with sub-5ms boot times, tiny memory footprints, and zero JVM dependencies at runtime.
 
 **Barista is not a legacy JVM compatibility layer.** It does not try to compile Spring Boot, Hibernate, reflection-heavy libraries, or arbitrary existing `.jar` files. That treadmill is effectively unbounded. Instead, Barista targets **new code written with Barista in mind**: expressive Kotlin or Java source, a small and explicit runtime contract, and Go's operational model underneath.
 
