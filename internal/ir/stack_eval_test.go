@@ -1,7 +1,6 @@
 package ir_test
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/JohnEsleyer/barista/internal/classfile"
@@ -195,24 +194,124 @@ func TestLowerBytecodeAconstNull(t *testing.T) {
 	}
 }
 
-func TestLowerBytecodeRejectsValuesAcrossBranches(t *testing.T) {
-	// The branch leaves v0 on the operand stack at the target.
+func TestLowerBytecodeStackMergePhi(t *testing.T) {
+	// 0: iconst_0
+	// 1: iconst_1
+	// 2: ifeq 5
+	// 5: ireturn
 	code := []byte{
 		ir.BytecodeIconst0,
 		ir.BytecodeIconst1,
 		ir.BytecodeIfeq, 0x00, 0x03,
 		ir.BytecodeIreturn,
 	}
-	_, err := ir.LowerBytecode("bad", "()I", code, true)
-	if err == nil || !strings.Contains(err.Error(), "phi nodes") {
-		t.Fatalf("expected phi-node error, got %v", err)
+	mir, err := ir.LowerBytecode("ternaryMerge", "()I", code, true)
+	if err != nil {
+		t.Fatalf("expected successful lowering with phi nodes, got error: %v", err)
+	}
+	var sawBranch, sawAssign bool
+	for _, inst := range mir.Instructions {
+		if inst.Op == ir.OpBranch && len(inst.PhiAssignments) > 0 {
+			sawBranch = true
+		}
+		if inst.Op == ir.OpAssign {
+			sawAssign = true
+		}
+	}
+	if !sawBranch || !sawAssign {
+		t.Errorf("expected branch with phi assignments and fallthrough assign: %+v", mir.Instructions)
 	}
 }
 
-func TestLowerBytecodeRejectsUnsupportedOpcode(t *testing.T) {
-	// 0xC0 is checkcast, which Phase 3 does not lower yet.
-	_, err := ir.LowerBytecode("bad", "()V", []byte{0xC0, 0x00, 0x01, ir.BytecodeReturn}, true)
-	if err == nil {
-		t.Fatal("expected an error for checkcast")
+func TestLowerBytecodeTableSwitch(t *testing.T) {
+	code := []byte{
+		ir.BytecodeIload0,      // 0
+		ir.BytecodeTableswitch, // 1
+		0x00, 0x00,             // alignment padding
+		0x00, 0x00, 0x00, 0x1b, // default target pc 28
+		0x00, 0x00, 0x00, 0x00, // low 0
+		0x00, 0x00, 0x00, 0x01, // high 1
+		0x00, 0x00, 0x00, 0x17, // case 0 -> pc 24
+		0x00, 0x00, 0x00, 0x19, // case 1 -> pc 26
+		ir.BytecodeIconst0, ir.BytecodeIreturn, // 24, 25
+		ir.BytecodeIconst1, ir.BytecodeIreturn, // 26, 27
+		ir.BytecodeIconstM1, ir.BytecodeIreturn, // 28, 29
+	}
+	mir, err := ir.LowerBytecode("choose", "(I)I", code, true)
+	if err != nil {
+		t.Fatalf("lower bytecode: %v", err)
+	}
+
+	var sw *ir.Instruction
+	for i := range mir.Instructions {
+		if mir.Instructions[i].Op == ir.OpTableSwitch {
+			sw = &mir.Instructions[i]
+			break
+		}
+	}
+	if sw == nil {
+		t.Fatalf("expected a tableswitch instruction, got %+v", mir.Instructions)
+	}
+	if sw.DefaultPC != 28 {
+		t.Errorf("default pc = %d, want 28", sw.DefaultPC)
+	}
+	if len(sw.Cases) != 2 {
+		t.Fatalf("got %d switch cases, want 2", len(sw.Cases))
+	}
+	if sw.Cases[0].Match != 0 || sw.Cases[0].TargetPC != 24 {
+		t.Errorf("case 0 = %+v, want match 0 target 24", sw.Cases[0])
+	}
+	if sw.Cases[1].Match != 1 || sw.Cases[1].TargetPC != 26 {
+		t.Errorf("case 1 = %+v, want match 1 target 26", sw.Cases[1])
+	}
+	if mir.CFG == nil || mir.CFG.Entry == nil {
+		t.Fatal("expected a CFG entry block")
+	}
+	if got := len(mir.CFG.Entry.Successors); got != 3 {
+		t.Errorf("switch entry has %d successors, want 3", got)
+	}
+}
+
+func TestLowerBytecodeLongArithmetic(t *testing.T) {
+	code := []byte{
+		ir.BytecodeLconst0,
+		ir.BytecodeLconst1,
+		ir.BytecodeLadd,
+		ir.BytecodeL2I,
+		ir.BytecodeIreturn,
+	}
+	mir, err := ir.LowerBytecode("longAdd", "()I", code, true)
+	if err != nil {
+		t.Fatalf("lower bytecode: %v", err)
+	}
+	add := mir.Instructions[2]
+	if add.Op != ir.OpAdd || add.Result == nil || add.Result.Type != "J" {
+		t.Fatalf("long add result = %+v, want type J", add.Result)
+	}
+	convert := mir.Instructions[3]
+	if convert.Op != ir.OpL2I || convert.Result == nil || convert.Result.Type != "I" {
+		t.Fatalf("l2i = %+v, want I result", convert)
+	}
+}
+
+func TestLowerBytecodeSwap(t *testing.T) {
+	code := []byte{
+		ir.BytecodeIconst1,
+		ir.BytecodeIconst2,
+		ir.BytecodeSwap,
+		ir.BytecodeIsub,
+		ir.BytecodeIreturn,
+	}
+	mir, err := ir.LowerBytecode("swapped", "()I", code, true)
+	if err != nil {
+		t.Fatalf("lower bytecode: %v", err)
+	}
+	sub := mir.Instructions[2]
+	if sub.Op != ir.OpSub {
+		t.Fatalf("instruction 2 = %s, want SUB", sub.Op)
+	}
+	if sub.Args[0].String() != mir.Instructions[1].Result.String() ||
+		sub.Args[1].String() != mir.Instructions[0].Result.String() {
+		t.Fatalf("swap operands = %v, want constant-2 - constant-1", sub.Args)
 	}
 }

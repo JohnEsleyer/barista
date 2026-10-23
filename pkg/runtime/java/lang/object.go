@@ -1,9 +1,11 @@
 package lang
 
-import "reflect"
+import (
+	"fmt"
+	"reflect"
+)
 
-// Object is the native shim for java.lang.Object. Generated classes do not
-// embed Object yet, but runtime-backed values share this small surface.
+// Object is the native shim for java.lang.Object.
 type Object struct{}
 
 // HashCode returns a stable identity-based hash for the object.
@@ -30,4 +32,40 @@ func (o *Object) ToString() *String {
 // String lets Object satisfy fmt.Stringer.
 func (o *Object) String() string {
 	return o.ToString().GoString()
+}
+
+// ObjectEquals implements Java Object.equals(Object) dynamically across any types.
+func ObjectEquals(left, right any) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	if eq, ok := left.(interface{ Equals(any) bool }); ok {
+		return eq.Equals(right)
+	}
+	return left == right
+}
+
+// ObjectHashCode implements Java Object.hashCode() dynamically across any types.
+func ObjectHashCode(value any) int32 {
+	if value == nil {
+		return 0
+	}
+	if h, ok := value.(interface{ HashCode() int32 }); ok {
+		return h.HashCode()
+	}
+	return int32(reflect.ValueOf(value).Pointer())
+}
+
+// ObjectToString implements Java Object.toString() dynamically across any types.
+func ObjectToString(value any) *String {
+	if value == nil {
+		return NewString("null")
+	}
+	if s, ok := value.(interface{ ToString() *String }); ok {
+		return s.ToString()
+	}
+	if s, ok := value.(fmt.Stringer); ok {
+		return NewString(s.String())
+	}
+	return NewString(fmt.Sprintf("%v", value))
 }

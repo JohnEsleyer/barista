@@ -24,17 +24,32 @@ func GenerateGo(cf *classfile.ClassFile, methods []*ir.MethodIR) ([]byte, error)
 		Decls: make([]ast.Decl, 0),
 	}
 
+	importSpecs := make([]*ast.ImportSpec, 0, 2)
 	if needsLang(cf, methods) {
-		importSpec := &ast.ImportSpec{
+		importSpecs = append(importSpecs, &ast.ImportSpec{
 			Path: &ast.BasicLit{
 				Kind:  token.STRING,
 				Value: strconv.Quote(langRuntimeImport),
 			},
+		})
+	}
+	if needsKotlin(methods) {
+		importSpecs = append(importSpecs, &ast.ImportSpec{
+			Path: &ast.BasicLit{
+				Kind:  token.STRING,
+				Value: strconv.Quote(kotlinRuntimeImport),
+			},
+		})
+	}
+	if len(importSpecs) > 0 {
+		specs := make([]ast.Spec, len(importSpecs))
+		for i, spec := range importSpecs {
+			specs[i] = spec
 		}
-		file.Imports = []*ast.ImportSpec{importSpec}
+		file.Imports = importSpecs
 		file.Decls = append(file.Decls, &ast.GenDecl{
 			Tok:   token.IMPORT,
-			Specs: []ast.Spec{importSpec},
+			Specs: specs,
 		})
 	}
 
@@ -46,8 +61,6 @@ func GenerateGo(cf *classfile.ClassFile, methods []*ir.MethodIR) ([]byte, error)
 		}
 	}
 
-	// Assign one stable Go name per JVM method. Overloads receive a descriptor
-	// suffix so call sites can resolve the exact target.
 	usedNames := make(map[string]bool)
 	methodNames := make(map[string]string)
 	for _, mir := range methods {
@@ -123,9 +136,6 @@ func buildStaticFieldDecl(cf *classfile.ClassFile, field classfile.MemberInfo) *
 	}
 }
 
-// emitPredeclarations emits var declarations for every SSA value and local used
-// by a branchy method. Go forbids goto statements that jump over declarations,
-// so all names must be declared before the first label.
 func emitPredeclarations(body *ast.BlockStmt, mir *ir.MethodIR, startSlot, paramSlots int, declared map[string]bool) {
 	locals := make(map[int]bool)
 	readLocals := make(map[int]bool)
@@ -151,6 +161,23 @@ func emitPredeclarations(body *ast.BlockStmt, mir *ir.MethodIR, startSlot, param
 		}
 		for _, arg := range inst.Args {
 			readValues[arg.ID] = true
+		}
+		for _, phi := range inst.PhiAssignments {
+			values[phi.Dest.ID] = phi.Dest
+			readValues[phi.Src.ID] = true
+			readValues[phi.Dest.ID] = true
+		}
+		for _, c := range inst.Cases {
+			for _, phi := range c.PhiAssignments {
+				values[phi.Dest.ID] = phi.Dest
+				readValues[phi.Src.ID] = true
+				readValues[phi.Dest.ID] = true
+			}
+		}
+		for _, phi := range inst.DefaultPhiAssignments {
+			values[phi.Dest.ID] = phi.Dest
+			readValues[phi.Src.ID] = true
+			readValues[phi.Dest.ID] = true
 		}
 		switch inst.Op {
 		case ir.OpLoadVar:
@@ -266,6 +293,16 @@ func branchExpr(inst ir.Instruction) (ast.Expr, error) {
 				return nil, fmt.Errorf("boolean branch cannot use condition %s", inst.Condition)
 			}
 		}
+		if isReferenceType(inst.Args[0].Type) {
+			if inst.Condition != ir.CondEQ && inst.Condition != ir.CondNE {
+				return nil, fmt.Errorf("reference branch cannot use condition %s", inst.Condition)
+			}
+			return &ast.BinaryExpr{
+				X:  left,
+				Op: tok,
+				Y:  ast.NewIdent("nil"),
+			}, nil
+		}
 		return &ast.BinaryExpr{
 			X:  left,
 			Op: tok,
@@ -284,6 +321,10 @@ func branchExpr(inst ir.Instruction) (ast.Expr, error) {
 	}, nil
 }
 
+func isReferenceType(desc string) bool {
+	return strings.HasPrefix(desc, "L") || strings.HasPrefix(desc, "[")
+}
+
 func binaryToken(op ir.OpKind) token.Token {
 	switch op {
 	case ir.OpAdd:
@@ -292,6 +333,8 @@ func binaryToken(op ir.OpKind) token.Token {
 		return token.SUB
 	case ir.OpMul:
 		return token.MUL
+	case ir.OpAnd:
+		return token.AND
 	default:
 		return token.QUO
 	}

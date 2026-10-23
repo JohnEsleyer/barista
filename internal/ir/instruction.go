@@ -40,6 +40,18 @@ const (
 	OpArrayStore
 	OpThrow
 	OpLoadException
+
+	// Phase 4: Kotlin engine (longs, bitwise masks, switches, casts, assignments).
+	OpAnd
+	OpCmpLong
+	OpConstLong
+	OpI2L
+	OpL2I
+	OpTableSwitch
+	OpLookupSwitch
+	OpCheckCast
+	OpInstanceOf
+	OpAssign
 )
 
 func (k OpKind) String() string {
@@ -104,6 +116,26 @@ func (k OpKind) String() string {
 		return "THROW"
 	case OpLoadException:
 		return "LOAD_EXCEPTION"
+	case OpAnd:
+		return "AND"
+	case OpCmpLong:
+		return "CMP_LONG"
+	case OpConstLong:
+		return "CONST_LONG"
+	case OpI2L:
+		return "I2L"
+	case OpL2I:
+		return "L2I"
+	case OpTableSwitch:
+		return "TABLE_SWITCH"
+	case OpLookupSwitch:
+		return "LOOKUP_SWITCH"
+	case OpCheckCast:
+		return "CHECK_CAST"
+	case OpInstanceOf:
+		return "INSTANCE_OF"
+	case OpAssign:
+		return "ASSIGN"
 	default:
 		return fmt.Sprintf("UNKNOWN_OP(%d)", k)
 	}
@@ -149,23 +181,48 @@ type Value struct {
 
 func (v Value) String() string { return fmt.Sprintf("v%d", v.ID) }
 
+// PhiAssignment represents an assignment of an operand-stack value to a join
+// temporary (phi variable) before a branch or switch target.
+type PhiAssignment struct {
+	Dest Value
+	Src  Value
+}
+
+// SwitchCase is one arm of a tableswitch or lookupswitch.
+type SwitchCase struct {
+	Match          int32
+	Target         int
+	TargetPC       int
+	PhiAssignments []PhiAssignment
+}
+
 // Instruction represents a single normalized intermediate instruction.
 type Instruction struct {
-	Op        OpKind
-	Result    *Value
-	Args      []Value
-	Constant  int32
-	LocalVar  int
-	Label     int
-	Target    int
-	Condition BranchCondition
+	Op         OpKind
+	Result     *Value
+	Args       []Value
+	Constant   int32
+	Constant64 int64
+	LocalVar   int
+	Label      int
+	Target     int
+	Condition  BranchCondition
 
 	// PC is the bytecode offset of the JVM instruction that produced this IR
-	// instruction. Synthetic instructions (for example the load/add/store
-	// expansion of iinc) may share a PC.
+	// instruction. Synthetic instructions may share a PC.
 	PC int
 	// TargetPC is the absolute bytecode offset of a branch target.
 	TargetPC int
+
+	// Switch metadata. DefaultTarget is the IR label for DefaultPC.
+	DefaultTarget int
+	DefaultPC     int
+	Cases         []SwitchCase
+
+	// PhiAssignments contains assignments to join variables executed when this
+	// branch or switch arm is taken.
+	PhiAssignments        []PhiAssignment
+	DefaultPhiAssignments []PhiAssignment
 
 	// Object/member metadata resolved from the constant pool.
 	OwnerClass string
@@ -181,8 +238,18 @@ func (inst Instruction) String() string {
 		return fmt.Sprintf("%s = local_%d", inst.Result, inst.LocalVar)
 	case OpStoreVar:
 		return fmt.Sprintf("local_%d = %s", inst.LocalVar, inst.Args[0])
-	case OpAdd, OpSub, OpMul, OpDiv:
+	case OpAssign:
+		return fmt.Sprintf("%s = %s", inst.Result, inst.Args[0])
+	case OpAdd, OpSub, OpMul, OpDiv, OpAnd:
 		return fmt.Sprintf("%s = %s %s %s", inst.Result, inst.Args[0], binarySymbol(inst.Op), inst.Args[1])
+	case OpConstLong:
+		return fmt.Sprintf("%s = %d", inst.Result, inst.Constant64)
+	case OpCmpLong:
+		return fmt.Sprintf("%s = cmp(%s, %s)", inst.Result, inst.Args[0], inst.Args[1])
+	case OpI2L:
+		return fmt.Sprintf("%s = int64(%s)", inst.Result, inst.Args[0])
+	case OpL2I:
+		return fmt.Sprintf("%s = int32(%s)", inst.Result, inst.Args[0])
 	case OpNeg:
 		return fmt.Sprintf("%s = -%s", inst.Result, inst.Args[0])
 	case OpLabel:
@@ -192,6 +259,12 @@ func (inst Instruction) String() string {
 		return fmt.Sprintf("L%d:", inst.Label)
 	case OpGoto:
 		return fmt.Sprintf("goto L%d (pc %d)", inst.Target, inst.TargetPC)
+	case OpTableSwitch, OpLookupSwitch:
+		return fmt.Sprintf("%s = switch %s default L%d cases=%d", inst.Op, inst.Args[0], inst.DefaultTarget, len(inst.Cases))
+	case OpCheckCast:
+		return fmt.Sprintf("%s = (%s) %s", inst.Result, inst.OwnerClass, inst.Args[0])
+	case OpInstanceOf:
+		return fmt.Sprintf("%s = %s instanceof %s", inst.Result, inst.Args[0], inst.OwnerClass)
 	case OpBranch:
 		if len(inst.Args) == 1 {
 			return fmt.Sprintf("if %s %s 0 goto L%d (pc %d)", inst.Args[0], inst.Condition, inst.Target, inst.TargetPC)
@@ -261,14 +334,14 @@ func binarySymbol(op OpKind) string {
 		return "*"
 	case OpDiv:
 		return "/"
+	case OpAnd:
+		return "&"
 	default:
 		return "?"
 	}
 }
 
 // ExceptionTrap describes one protected bytecode range and its catch target.
-// CatchClass is an internal JVM class name; CatchType 0 is normalized to
-// java/lang/Throwable for catch-all handlers.
 type ExceptionTrap struct {
 	StartPC    int
 	EndPC      int

@@ -25,7 +25,7 @@ type funcEmitter struct {
 func (e *funcEmitter) append(stmt ast.Stmt) {
 	for i := len(e.pending) - 1; i >= 0; i-- {
 		stmt = &ast.LabeledStmt{
-			Label: ast.NewIdent(fmt.Sprintf("L%d", e.pending[i])),
+			Label: ast.NewIdent(labelName(e.pending[i])),
 			Stmt:  stmt,
 		}
 	}
@@ -69,6 +69,19 @@ func (e *funcEmitter) emit(inst ir.Instruction) error {
 		}
 		e.assignResult(inst.Result, valueExpr)
 
+	case ir.OpConstLong:
+		if inst.Result == nil {
+			return fmt.Errorf("CONST_LONG without a result in %s", e.mir.Name)
+		}
+		valueExpr := ast.Expr(&ast.BasicLit{
+			Kind:  token.INT,
+			Value: strconv.FormatInt(inst.Constant64, 10),
+		})
+		if !e.declared[inst.Result.String()] {
+			valueExpr = &ast.CallExpr{Fun: ast.NewIdent("int64"), Args: []ast.Expr{valueExpr}}
+		}
+		e.assignResult(inst.Result, valueExpr)
+
 	case ir.OpLoadVar:
 		if inst.Result == nil {
 			return fmt.Errorf("LOAD_VAR without a result in %s", e.mir.Name)
@@ -89,7 +102,13 @@ func (e *funcEmitter) emit(inst ir.Instruction) error {
 		}
 		e.assign(localName, ast.NewIdent(inst.Args[0].String()))
 
-	case ir.OpAdd, ir.OpSub, ir.OpMul, ir.OpDiv:
+	case ir.OpAssign:
+		if inst.Result == nil || len(inst.Args) != 1 {
+			return fmt.Errorf("ASSIGN with invalid operands in %s", e.mir.Name)
+		}
+		e.assignResult(inst.Result, ast.NewIdent(inst.Args[0].String()))
+
+	case ir.OpAdd, ir.OpSub, ir.OpMul, ir.OpDiv, ir.OpAnd:
 		if len(inst.Args) != 2 || inst.Result == nil {
 			return fmt.Errorf("binary operation with invalid operands in %s", e.mir.Name)
 		}
@@ -97,6 +116,31 @@ func (e *funcEmitter) emit(inst ir.Instruction) error {
 			X:  ast.NewIdent(inst.Args[0].String()),
 			Op: binaryToken(inst.Op),
 			Y:  ast.NewIdent(inst.Args[1].String()),
+		})
+
+	case ir.OpCmpLong:
+		if len(inst.Args) != 2 || inst.Result == nil {
+			return fmt.Errorf("CMP_LONG with invalid operands in %s", e.mir.Name)
+		}
+		e.assignResult(inst.Result, &ast.CallExpr{
+			Fun: langSelector("CompareLong"),
+			Args: []ast.Expr{
+				ast.NewIdent(inst.Args[0].String()),
+				ast.NewIdent(inst.Args[1].String()),
+			},
+		})
+
+	case ir.OpI2L, ir.OpL2I:
+		if len(inst.Args) != 1 || inst.Result == nil {
+			return fmt.Errorf("%s with invalid operands in %s", inst.Op, e.mir.Name)
+		}
+		target := "int64"
+		if inst.Op == ir.OpL2I {
+			target = "int32"
+		}
+		e.assignResult(inst.Result, &ast.CallExpr{
+			Fun:  ast.NewIdent(target),
+			Args: []ast.Expr{ast.NewIdent(inst.Args[0].String())},
 		})
 
 	case ir.OpNeg:
@@ -109,12 +153,12 @@ func (e *funcEmitter) emit(inst ir.Instruction) error {
 		})
 
 	case ir.OpLabel:
-		e.pending = append(e.pending, inst.Label)
+		e.pending = append(e.pending, inst.PC)
 
 	case ir.OpGoto:
 		e.append(&ast.BranchStmt{
 			Tok:   token.GOTO,
-			Label: ast.NewIdent(fmt.Sprintf("L%d", inst.Target)),
+			Label: ast.NewIdent(labelName(inst.TargetPC)),
 		})
 
 	case ir.OpBranch:
@@ -122,14 +166,88 @@ func (e *funcEmitter) emit(inst ir.Instruction) error {
 		if err != nil {
 			return fmt.Errorf("method %s: %w", e.mir.Name, err)
 		}
+		body := make([]ast.Stmt, 0, len(inst.PhiAssignments)+1)
+		for _, phi := range inst.PhiAssignments {
+			body = append(body, &ast.AssignStmt{
+				Lhs: []ast.Expr{ast.NewIdent(phi.Dest.String())},
+				Tok: token.ASSIGN,
+				Rhs: []ast.Expr{ast.NewIdent(phi.Src.String())},
+			})
+		}
+		body = append(body, &ast.BranchStmt{
+			Tok:   token.GOTO,
+			Label: ast.NewIdent(labelName(inst.TargetPC)),
+		})
 		e.append(&ast.IfStmt{
 			Cond: cond,
-			Body: &ast.BlockStmt{List: []ast.Stmt{
-				&ast.BranchStmt{
-					Tok:   token.GOTO,
-					Label: ast.NewIdent(fmt.Sprintf("L%d", inst.Target)),
-				},
-			}},
+			Body: &ast.BlockStmt{List: body},
+		})
+
+	case ir.OpTableSwitch, ir.OpLookupSwitch:
+		if len(inst.Args) != 1 {
+			return fmt.Errorf("SWITCH with invalid operands in %s", e.mir.Name)
+		}
+		switchStmt := &ast.SwitchStmt{
+			Tag:  ast.NewIdent(inst.Args[0].String()),
+			Body: &ast.BlockStmt{List: make([]ast.Stmt, 0, len(inst.Cases)+1)},
+		}
+		for _, c := range inst.Cases {
+			caseBody := make([]ast.Stmt, 0, len(c.PhiAssignments)+1)
+			for _, phi := range c.PhiAssignments {
+				caseBody = append(caseBody, &ast.AssignStmt{
+					Lhs: []ast.Expr{ast.NewIdent(phi.Dest.String())},
+					Tok: token.ASSIGN,
+					Rhs: []ast.Expr{ast.NewIdent(phi.Src.String())},
+				})
+			}
+			caseBody = append(caseBody, &ast.BranchStmt{
+				Tok:   token.GOTO,
+				Label: ast.NewIdent(labelName(c.TargetPC)),
+			})
+			switchStmt.Body.List = append(switchStmt.Body.List, &ast.CaseClause{
+				List: []ast.Expr{intLit(int64(c.Match))},
+				Body: caseBody,
+			})
+		}
+		defaultBody := make([]ast.Stmt, 0, len(inst.DefaultPhiAssignments)+1)
+		for _, phi := range inst.DefaultPhiAssignments {
+			defaultBody = append(defaultBody, &ast.AssignStmt{
+				Lhs: []ast.Expr{ast.NewIdent(phi.Dest.String())},
+				Tok: token.ASSIGN,
+				Rhs: []ast.Expr{ast.NewIdent(phi.Src.String())},
+			})
+		}
+		defaultBody = append(defaultBody, &ast.BranchStmt{
+			Tok:   token.GOTO,
+			Label: ast.NewIdent(labelName(inst.DefaultPC)),
+		})
+		switchStmt.Body.List = append(switchStmt.Body.List, &ast.CaseClause{
+			Body: defaultBody,
+		})
+		e.append(switchStmt)
+
+	case ir.OpCheckCast:
+		if len(inst.Args) != 1 || inst.Result == nil {
+			return fmt.Errorf("CHECK_CAST with invalid operands in %s", e.mir.Name)
+		}
+		e.assignResult(inst.Result, &ast.CallExpr{
+			Fun: &ast.IndexExpr{
+				X:     langSelector("CheckCast"),
+				Index: classTypeExpr(inst.OwnerClass),
+			},
+			Args: []ast.Expr{ast.NewIdent(inst.Args[0].String())},
+		})
+
+	case ir.OpInstanceOf:
+		if len(inst.Args) != 1 || inst.Result == nil {
+			return fmt.Errorf("INSTANCE_OF with invalid operands in %s", e.mir.Name)
+		}
+		e.assignResult(inst.Result, &ast.CallExpr{
+			Fun: &ast.IndexExpr{
+				X:     langSelector("IsInstanceOf"),
+				Index: classTypeExpr(inst.OwnerClass),
+			},
+			Args: []ast.Expr{ast.NewIdent(inst.Args[0].String())},
 		})
 
 	case ir.OpNew:
@@ -218,27 +336,54 @@ func (e *funcEmitter) emit(inst ir.Instruction) error {
 			e.append(blankUse(inst.Args[0].String()))
 			return nil
 		}
-		var callName string
+		var call *ast.CallExpr
 		if isRuntimeClass(inst.OwnerClass) {
-			callName = runtimeMethodName(inst.OwnerClass, inst.MemberName, inst.Descriptor)
-		} else {
-			if inst.OwnerClass == "java/lang/Object" {
+			callName := runtimeMethodName(inst.OwnerClass, inst.MemberName, inst.Descriptor)
+			call = &ast.CallExpr{
+				Fun: &ast.SelectorExpr{
+					X:   ast.NewIdent(inst.Args[0].String()),
+					Sel: ast.NewIdent(callName),
+				},
+				Args: make([]ast.Expr, 0, len(inst.Args)-1),
+			}
+			for _, arg := range inst.Args[1:] {
+				call.Args = append(call.Args, ast.NewIdent(arg.String()))
+			}
+		} else if inst.OwnerClass == "java/lang/Object" {
+			switch inst.MemberName {
+			case "equals":
+				call = &ast.CallExpr{
+					Fun:  langSelector("ObjectEquals"),
+					Args: []ast.Expr{ast.NewIdent(inst.Args[0].String()), ast.NewIdent(inst.Args[1].String())},
+				}
+			case "hashCode":
+				call = &ast.CallExpr{
+					Fun:  langSelector("ObjectHashCode"),
+					Args: []ast.Expr{ast.NewIdent(inst.Args[0].String())},
+				}
+			case "toString":
+				call = &ast.CallExpr{
+					Fun:  langSelector("ObjectToString"),
+					Args: []ast.Expr{ast.NewIdent(inst.Args[0].String())},
+				}
+			default:
 				return fmt.Errorf("java/lang/Object.%s is not supported yet", inst.MemberName)
 			}
+		} else {
 			if inst.OwnerClass != "" && inst.OwnerClass != e.cf.ThisClass {
 				return fmt.Errorf("%s on external class %s is not supported yet; only single-class dispatch is implemented", inst.MemberName, inst.OwnerClass)
 			}
-			callName = resolveMethodName(e.methodNames, inst.OwnerClass, inst.MemberName, inst.Descriptor)
-		}
-		call := &ast.CallExpr{
-			Fun: &ast.SelectorExpr{
-				X:   ast.NewIdent(inst.Args[0].String()),
-				Sel: ast.NewIdent(callName),
-			},
-			Args: make([]ast.Expr, 0, len(inst.Args)-1),
-		}
-		for _, arg := range inst.Args[1:] {
-			call.Args = append(call.Args, ast.NewIdent(arg.String()))
+			callName := resolveMethodName(e.methodNames, inst.OwnerClass, inst.MemberName, inst.Descriptor)
+			call = &ast.CallExpr{
+				Fun: &ast.SelectorExpr{
+					X:   ast.NewIdent(inst.Args[0].String()),
+					Sel: ast.NewIdent(callName),
+				},
+				Args: make([]ast.Expr, 0, len(inst.Args)-1),
+			}
+			for _, arg := range inst.Args[1:] {
+				call.Args = append(call.Args, ast.NewIdent(arg.String()))
+			}
 		}
 		if inst.Result != nil {
 			e.assignResult(inst.Result, call)
@@ -247,9 +392,55 @@ func (e *funcEmitter) emit(inst ir.Instruction) error {
 		}
 
 	case ir.OpInvokeStatic:
+		if isKotlinIntrinsicClass(inst.OwnerClass) {
+			intrinsic, ok := kotlinIntrinsicName(inst.MemberName)
+			if !ok {
+				return fmt.Errorf("unsupported Kotlin intrinsic %s.%s in %s", inst.OwnerClass, inst.MemberName, e.mir.Name)
+			}
+			call := &ast.CallExpr{
+				Fun:  jvmSelector(intrinsic),
+				Args: make([]ast.Expr, 0, len(inst.Args)),
+			}
+			for _, arg := range inst.Args {
+				call.Args = append(call.Args, ast.NewIdent(arg.String()))
+			}
+			if inst.Result != nil {
+				e.assignResult(inst.Result, call)
+			} else {
+				e.append(&ast.ExprStmt{X: call})
+			}
+			return nil
+		}
+		if inst.OwnerClass == "kotlin/io/ConsoleKt" {
+			callArgs := make([]ast.Expr, 0, len(inst.Args))
+			for _, arg := range inst.Args {
+				callArgs = append(callArgs, ast.NewIdent(arg.String()))
+			}
+			var selName string
+			switch inst.MemberName {
+			case "println":
+				selName = "Println"
+			case "print":
+				selName = "Print"
+			default:
+				return fmt.Errorf("unsupported ConsoleKt.%s in %s", inst.MemberName, e.mir.Name)
+			}
+			call := &ast.CallExpr{
+				Fun: &ast.SelectorExpr{
+					X:   langSelector("SystemOut"),
+					Sel: ast.NewIdent(selName),
+				},
+				Args: callArgs,
+			}
+			e.append(&ast.ExprStmt{X: call})
+			return nil
+		}
 		var call *ast.CallExpr
 		if isRuntimeClass(inst.OwnerClass) {
 			callName := runtimeMethodName(inst.OwnerClass, inst.MemberName, inst.Descriptor)
+			if inst.OwnerClass == "java/lang/Long" && inst.MemberName == "hashCode" {
+				callName = "LongHashCode"
+			}
 			call = &ast.CallExpr{
 				Fun:  langSelector(callName),
 				Args: make([]ast.Expr, 0, len(inst.Args)),
@@ -360,7 +551,11 @@ func (e *funcEmitter) emit(inst ir.Instruction) error {
 		}
 		retStmt := &ast.ReturnStmt{}
 		if len(inst.Args) > 0 {
-			retStmt.Results = []ast.Expr{ast.NewIdent(inst.Args[0].String())}
+			retExpr, err := returnExpression(e.mir.Descriptor, inst.Args[0])
+			if err != nil {
+				return fmt.Errorf("method %s: %w", e.mir.Name, err)
+			}
+			retStmt.Results = []ast.Expr{retExpr}
 		}
 		e.append(retStmt)
 
@@ -424,7 +619,8 @@ func buildFuncDecl(cf *classfile.ClassFile, mir *ir.MethodIR, fnName string, met
 	branchy := len(mir.ExceptionTraps) > 0
 	if !branchy {
 		for _, inst := range mir.Instructions {
-			if inst.Op == ir.OpLabel || inst.Op == ir.OpGoto || inst.Op == ir.OpBranch {
+			if inst.Op == ir.OpLabel || inst.Op == ir.OpGoto || inst.Op == ir.OpBranch ||
+				inst.Op == ir.OpTableSwitch || inst.Op == ir.OpLookupSwitch {
 				branchy = true
 				break
 			}
@@ -554,6 +750,16 @@ func emitTryGroup(main *funcEmitter, group tryGroup, insts []ir.Instruction, lab
 			if targetPC < group.StartPC || targetPC >= group.EndPC {
 				return fmt.Errorf("branch from protected range [%d,%d) to pc %d is not supported yet", group.StartPC, group.EndPC, targetPC)
 			}
+		case ir.OpTableSwitch, ir.OpLookupSwitch:
+			targets := []int{inst.DefaultPC}
+			for _, c := range inst.Cases {
+				targets = append(targets, c.TargetPC)
+			}
+			for _, targetPC := range targets {
+				if targetPC < group.StartPC || targetPC >= group.EndPC {
+					return fmt.Errorf("switch from protected range [%d,%d) to pc %d is not supported yet", group.StartPC, group.EndPC, targetPC)
+				}
+			}
 		}
 	}
 
@@ -600,15 +806,14 @@ func emitTryGroup(main *funcEmitter, group tryGroup, insts []ir.Instruction, lab
 			continue
 		}
 		seen[trap.HandlerPC] = true
-		label, ok := labelAtPC[trap.HandlerPC]
-		if !ok {
+		if _, ok := labelAtPC[trap.HandlerPC]; !ok {
 			return fmt.Errorf("handler pc %d has no IR label", trap.HandlerPC)
 		}
 		dispatch.Body.List = append(dispatch.Body.List, &ast.CaseClause{
 			List: []ast.Expr{intLit(int64(trap.HandlerPC))},
 			Body: []ast.Stmt{&ast.BranchStmt{
 				Tok:   token.GOTO,
-				Label: ast.NewIdent(fmt.Sprintf("L%d", label)),
+				Label: ast.NewIdent(labelName(trap.HandlerPC)),
 			}},
 		})
 	}
@@ -668,6 +873,38 @@ func langSelector(name string) ast.Expr {
 	return &ast.SelectorExpr{X: ast.NewIdent("lang"), Sel: ast.NewIdent(name)}
 }
 
+func jvmSelector(name string) ast.Expr {
+	return &ast.SelectorExpr{X: ast.NewIdent("jvm"), Sel: ast.NewIdent(name)}
+}
+
+func labelName(pc int) string {
+	return fmt.Sprintf("pc_%d", pc)
+}
+
+func classTypeExpr(owner string) ast.Expr {
+	desc := "L" + owner + ";"
+	if owner != "" && owner[0] == '[' {
+		desc = owner
+	}
+	return descriptorOrAny(desc)
+}
+
+func returnExpression(methodDescriptor string, value ir.Value) (ast.Expr, error) {
+	md, err := ir.ParseMethodDescriptor(methodDescriptor)
+	if err != nil {
+		return nil, err
+	}
+	expr := ast.Expr(ast.NewIdent(value.String()))
+	if md.Return == "Z" && value.Type == "I" {
+		expr = &ast.BinaryExpr{
+			X:  expr,
+			Op: token.NEQ,
+			Y:  &ast.BasicLit{Kind: token.INT, Value: "0"},
+		}
+	}
+	return expr, nil
+}
+
 func intLit(value int64) *ast.BasicLit {
 	return &ast.BasicLit{Kind: token.INT, Value: strconv.FormatInt(value, 10)}
 }
@@ -698,6 +935,17 @@ func usedValues(mir *ir.MethodIR) map[int]bool {
 	for _, inst := range mir.Instructions {
 		for _, arg := range inst.Args {
 			used[arg.ID] = true
+		}
+		for _, phi := range inst.PhiAssignments {
+			used[phi.Src.ID] = true
+		}
+		for _, c := range inst.Cases {
+			for _, phi := range c.PhiAssignments {
+				used[phi.Src.ID] = true
+			}
+		}
+		for _, phi := range inst.DefaultPhiAssignments {
+			used[phi.Src.ID] = true
 		}
 	}
 	return used

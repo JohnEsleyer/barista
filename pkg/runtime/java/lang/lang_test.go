@@ -30,9 +30,58 @@ func TestStringBuilder(t *testing.T) {
 	b.Init()
 	b.AppendString(lang.NewString("Barista #"))
 	b.AppendInt(7)
-	if got := b.ToString().GoString(); got != "Barista #7" {
-		t.Errorf("builder = %q, want %q", got, "Barista #7")
+	b.AppendChar('!')
+	if got := b.ToString().GoString(); got != "Barista #7!" {
+		t.Errorf("builder = %q, want %q", got, "Barista #7!")
 	}
+}
+
+func TestStringHashCodeMatchesJava(t *testing.T) {
+	if got := lang.NewString("Barista").HashCode(); got != 1331252106 {
+		t.Errorf("HashCode(\"Barista\") = %d, want 1331252106", got)
+	}
+}
+
+func TestLongAndCastHelpers(t *testing.T) {
+	if got := lang.LongHashCode(42); got != 42 {
+		t.Errorf("LongHashCode(42) = %d, want 42", got)
+	}
+	if got := lang.LongHashCode(0x1_0000_0001); got != 0 {
+		t.Errorf("LongHashCode(0x100000001) = %d, want 0", got)
+	}
+	if got := lang.CompareLong(1, 2); got != -1 {
+		t.Errorf("CompareLong(1,2) = %d, want -1", got)
+	}
+	if got := lang.CompareLong(2, 2); got != 0 {
+		t.Errorf("CompareLong(2,2) = %d, want 0", got)
+	}
+	if got := lang.CompareLong(3, 2); got != 1 {
+		t.Errorf("CompareLong(3,2) = %d, want 1", got)
+	}
+
+	s := lang.NewString("Barista")
+	if got := lang.CheckCast[*lang.String](s); got != s {
+		t.Error("CheckCast did not return the concrete value")
+	}
+	if !lang.IsInstanceOf[*lang.String](s) {
+		t.Error("IsInstanceOf[*String] = false")
+	}
+	if lang.IsInstanceOf[*lang.IndexOutOfBoundsException](s) {
+		t.Error("IsInstanceOf[*IndexOutOfBoundsException] = true")
+	}
+	if got := lang.CheckCast[*lang.String](nil); got != nil {
+		t.Error("CheckCast(nil) did not return nil")
+	}
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatal("expected a ClassCastException panic")
+		}
+		if !lang.MatchesException(recovered, "java/lang/ClassCastException") {
+			t.Fatalf("recovered %T, want ClassCastException", recovered)
+		}
+	}()
+	lang.CheckCast[*lang.IndexOutOfBoundsException](s)
 }
 
 func TestExceptionMatching(t *testing.T) {

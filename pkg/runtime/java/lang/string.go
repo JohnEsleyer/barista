@@ -88,6 +88,18 @@ func (s *String) Concat(other *String) *String {
 	return NewString(s.value + other.value)
 }
 
+// HashCode returns the Java String hash over UTF-16 code units.
+func (s *String) HashCode() int32 {
+	if s == nil {
+		panic(NewNullPointerException(NewString("String is null")))
+	}
+	var hash int32
+	for _, unit := range utf16.Encode([]rune(s.value)) {
+		hash = 31*hash + int32(unit)
+	}
+	return hash
+}
+
 // ToString returns the receiver.
 func (s *String) ToString() *String {
 	return s

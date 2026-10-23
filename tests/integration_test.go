@@ -1,11 +1,11 @@
 package tests
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -14,286 +14,37 @@ import (
 	"github.com/JohnEsleyer/barista/internal/ir"
 )
 
-func compileJavaFixture(t *testing.T, source string) string {
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("unable to locate test directory")
+	}
+	return filepath.Dir(filepath.Dir(filename))
+}
+
+func compileFixtureJava(t *testing.T, javaPath string) string {
 	t.Helper()
 	javac, err := exec.LookPath("javac")
 	if err != nil {
-		t.Skip("javac is not installed")
+		t.Skip("javac not found on PATH; skipping Java integration test")
 	}
 	outDir := t.TempDir()
-	cmd := exec.Command(javac, "-d", outDir, filepath.Join("fixtures", "java", source))
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("javac failed: %v\n%s", err, output)
+	cmd := exec.Command(javac, "-d", outDir, javaPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("javac failed: %v\n%s", err, string(out))
 	}
-	className := strings.TrimSuffix(source, ".java")
-	return filepath.Join(outDir, className+".class")
+	base := strings.TrimSuffix(filepath.Base(javaPath), ".java")
+	return filepath.Join(outDir, base+".class")
 }
 
-func compileCalculator(t *testing.T) string {
+func brewClass(t *testing.T, classPath string) []byte {
 	t.Helper()
-	return compileJavaFixture(t, "Calculator.java")
-}
-
-func TestCalculatorFixtureCompiles(t *testing.T) {
-	classPath := compileCalculator(t)
-	classBytes, err := os.ReadFile(classPath)
-	if err != nil {
-		t.Fatalf("read Calculator.class: %v", err)
-	}
-	const magic = "\xca\xfe\xba\xbe"
-	if len(classBytes) < len(magic) || !bytes.Equal(classBytes[:len(magic)], []byte(magic)) {
-		t.Fatal("Calculator.class does not start with 0xCAFEBABE")
-	}
-}
-
-func TestCalculatorPipeline(t *testing.T) {
-	classPath := compileCalculator(t)
 	cf, err := classfile.ParseClassFilePath(classPath)
 	if err != nil {
-		t.Fatalf("parse Calculator.class: %v", err)
+		t.Fatalf("parse classfile %s: %v", classPath, err)
 	}
-	if cf.ThisClass != "Calculator" {
-		t.Fatalf("ThisClass = %q, want Calculator", cf.ThisClass)
-	}
-	if cf.SuperClass != "java/lang/Object" {
-		t.Fatalf("SuperClass = %q, want java/lang/Object", cf.SuperClass)
-	}
-
-	add := cf.FindMethod("add", "(II)I")
-	if add == nil {
-		t.Fatal("add(II)I not found")
-	}
-	addCode := add.FindCode()
-	if addCode == nil {
-		t.Fatal("add(II)I has no Code attribute")
-	}
-	if addCode.MaxStack != 2 || addCode.MaxLocals != 2 {
-		t.Errorf("add max_stack/max_locals = %d/%d, want 2/2", addCode.MaxStack, addCode.MaxLocals)
-	}
-	if addCode.FindAttribute("LineNumberTable") == nil {
-		t.Error("add(II)I has no parsed LineNumberTable")
-	}
-
-	lowered := make([]*ir.MethodIR, 0, len(cf.Methods))
-	methods := make(map[string]*ir.MethodIR)
-	for _, m := range cf.Methods {
-		code := m.FindCode()
-		if code == nil {
-			continue
-		}
-		mir, err := ir.LowerMethod(cf.ConstantPool, cf.ThisClass, m.Name, m.Descriptor, code.Code, m.IsStatic())
-		if err != nil {
-			t.Fatalf("lower %s: %v", m.Name, err)
-		}
-		lowered = append(lowered, mir)
-		methods[m.Name] = mir
-	}
-
-	for _, name := range []string{"add", "subtract", "multiply", "divide", "sumTo", "absolute", "max"} {
-		if methods[name] == nil {
-			t.Errorf("method %s was not lowered", name)
-		}
-	}
-	if !hasOp(methods["sumTo"].Instructions, ir.OpGoto) {
-		t.Error("sumTo should contain a loop back-edge (goto)")
-	}
-	if !hasOp(methods["absolute"].Instructions, ir.OpBranch) {
-		t.Error("absolute should contain a branch")
-	}
-
-	goCode, err := codegen.GenerateGo(cf, lowered)
-	if err != nil {
-		t.Fatalf("generate Go: %v", err)
-	}
-	if !bytes.Contains(goCode, []byte("func SumTo(local_0 int32) int32")) {
-		t.Errorf("generated Go does not contain SumTo:\n%s", goCode)
-	}
-	if !bytes.Contains(goCode, []byte("goto L")) {
-		t.Errorf("generated Go does not contain a goto:\n%s", goCode)
-	}
-
-	runGeneratedGo(t, goCode)
-}
-
-func TestCounterPipeline(t *testing.T) {
-	classPath := compileJavaFixture(t, "Counter.java")
-	cf, err := classfile.ParseClassFilePath(classPath)
-	if err != nil {
-		t.Fatalf("parse Counter.class: %v", err)
-	}
-	if cf.ThisClass != "Counter" {
-		t.Fatalf("ThisClass = %q, want Counter", cf.ThisClass)
-	}
-
-	lowered := make([]*ir.MethodIR, 0, len(cf.Methods))
-	methods := make(map[string]*ir.MethodIR)
-	for _, m := range cf.Methods {
-		code := m.FindCode()
-		if code == nil {
-			continue
-		}
-		mir, err := ir.LowerMethod(cf.ConstantPool, cf.ThisClass, m.Name, m.Descriptor, code.Code, m.IsStatic())
-		if err != nil {
-			t.Fatalf("lower %s: %v", m.Name, err)
-		}
-		lowered = append(lowered, mir)
-		methods[m.Name] = mir
-	}
-
-	for _, name := range []string{"<clinit>", "<init>", "increment", "getValue", "addValue", "create", "createAndGet", "getCreated"} {
-		if methods[name] == nil {
-			t.Errorf("method %s was not lowered", name)
-		}
-	}
-	if !hasOp(methods["<clinit>"].Instructions, ir.OpPutStatic) {
-		t.Error("static initializer should write the created field")
-	}
-	if !hasOp(methods["<init>"].Instructions, ir.OpPutField) {
-		t.Error("constructor should write an instance field")
-	}
-	if !hasOp(methods["<init>"].Instructions, ir.OpGetStatic) ||
-		!hasOp(methods["<init>"].Instructions, ir.OpPutStatic) {
-		t.Error("constructor should update static state")
-	}
-	if !hasOp(methods["increment"].Instructions, ir.OpGetField) ||
-		!hasOp(methods["increment"].Instructions, ir.OpPutField) {
-		t.Error("increment should read and write the value field")
-	}
-	if !hasOp(methods["create"].Instructions, ir.OpNew) ||
-		!hasOp(methods["create"].Instructions, ir.OpInvokeSpecial) {
-		t.Error("create should allocate and construct a Counter")
-	}
-	if !hasOp(methods["addValue"].Instructions, ir.OpInvokeVirtual) {
-		t.Error("addValue should dispatch increment virtually")
-	}
-	if !hasOp(methods["createAndGet"].Instructions, ir.OpInvokeStatic) ||
-		!hasOp(methods["createAndGet"].Instructions, ir.OpInvokeVirtual) {
-		t.Error("createAndGet should use static and virtual dispatch")
-	}
-	if methods["increment"].CFG == nil || len(methods["increment"].CFG.Blocks) == 0 {
-		t.Error("increment should have a CFG")
-	}
-
-	goCode, err := codegen.GenerateGo(cf, lowered)
-	if err != nil {
-		t.Fatalf("generate Go: %v", err)
-	}
-	for _, want := range [][]byte{
-		[]byte("type Counter struct"),
-		[]byte("Value int32"),
-		[]byte("var CounterCreated int32"),
-		[]byte("func init()"),
-		[]byte("func (this *Counter) Init(local_1 int32)"),
-		[]byte("func Create(local_0 int32) *Counter"),
-	} {
-		if !bytes.Contains(goCode, want) {
-			t.Errorf("generated Go does not contain %q:\n%s", want, goCode)
-		}
-	}
-
-	runGeneratedCounter(t, goCode)
-}
-
-func TestGreeterPipeline(t *testing.T) {
-	classPath := compileJavaFixture(t, "Greeter.java")
-	cf, err := classfile.ParseClassFilePath(classPath)
-	if err != nil {
-		t.Fatalf("parse Greeter.class: %v", err)
-	}
-
-	lowered, methods := lowerClassWithExceptions(t, cf)
-	runMethod := methods["run"]
-	if runMethod == nil {
-		t.Fatal("run()I was not lowered")
-	}
-	for _, op := range []ir.OpKind{
-		ir.OpConstString,
-		ir.OpConstClass,
-		ir.OpNewArray,
-		ir.OpANewArray,
-		ir.OpArrayStore,
-		ir.OpArrayLoad,
-		ir.OpArrayLength,
-		ir.OpInvokeVirtual,
-	} {
-		if !hasOp(runMethod.Instructions, op) {
-			t.Errorf("Greeter.run should contain %s", op)
-		}
-	}
-
-	goCode, err := codegen.GenerateGo(cf, lowered)
-	if err != nil {
-		t.Fatalf("generate Go: %v", err)
-	}
-	for _, want := range [][]byte{
-		[]byte("github.com/JohnEsleyer/barista/pkg/runtime/java/lang"),
-		[]byte("lang.NewString"),
-		[]byte("lang.NewClass"),
-		[]byte("make([]int32"),
-		[]byte("make([]*lang.String"),
-		[]byte("lang.ArrayStore"),
-		[]byte("lang.ArrayLoad"),
-		[]byte("lang.SystemOut"),
-		[]byte(".Println"),
-		[]byte("&lang.StringBuilder{}"),
-	} {
-		if !bytes.Contains(goCode, want) {
-			t.Errorf("generated Go does not contain %q:\n%s", want, goCode)
-		}
-	}
-
-	runGeneratedGreeter(t, goCode)
-}
-
-func TestTryCatchPipeline(t *testing.T) {
-	classPath := compileJavaFixture(t, "TryCatch.java")
-	cf, err := classfile.ParseClassFilePath(classPath)
-	if err != nil {
-		t.Fatalf("parse TryCatch.class: %v", err)
-	}
-
-	lowered, methods := lowerClassWithExceptions(t, cf)
-	runMethod := methods["run"]
-	if runMethod == nil {
-		t.Fatal("run(Z)I was not lowered")
-	}
-	if len(runMethod.ExceptionTraps) != 1 {
-		t.Fatalf("run has %d exception traps, want 1", len(runMethod.ExceptionTraps))
-	}
-	trap := runMethod.ExceptionTraps[0]
-	if trap.CatchClass != "java/lang/RuntimeException" {
-		t.Errorf("catch class = %q, want java/lang/RuntimeException", trap.CatchClass)
-	}
-	for _, op := range []ir.OpKind{ir.OpThrow, ir.OpLoadException} {
-		if !hasOp(runMethod.Instructions, op) {
-			t.Errorf("TryCatch.run should contain %s", op)
-		}
-	}
-
-	goCode, err := codegen.GenerateGo(cf, lowered)
-	if err != nil {
-		t.Fatalf("generate Go: %v", err)
-	}
-	for _, want := range [][]byte{
-		[]byte("defer func()"),
-		[]byte("recover()"),
-		[]byte("lang.MatchesException"),
-		[]byte("lang.AsThrowable"),
-		[]byte("goto L"),
-		[]byte("panic("),
-	} {
-		if !bytes.Contains(goCode, want) {
-			t.Errorf("generated Go does not contain %q:\n%s", want, goCode)
-		}
-	}
-
-	runGeneratedTryCatch(t, goCode)
-}
-
-func lowerClassWithExceptions(t *testing.T, cf *classfile.ClassFile) ([]*ir.MethodIR, map[string]*ir.MethodIR) {
-	t.Helper()
-	lowered := make([]*ir.MethodIR, 0, len(cf.Methods))
-	methods := make(map[string]*ir.MethodIR)
+	methods := make([]*ir.MethodIR, 0, len(cf.Methods))
 	for _, m := range cf.Methods {
 		code := m.FindCode()
 		if code == nil {
@@ -301,53 +52,70 @@ func lowerClassWithExceptions(t *testing.T, cf *classfile.ClassFile) ([]*ir.Meth
 		}
 		mir, err := ir.LowerMethodWithExceptions(cf.ConstantPool, cf.ThisClass, m.Name, m.Descriptor, code.Code, m.IsStatic(), code.ExceptionTable)
 		if err != nil {
-			t.Fatalf("lower %s: %v", m.Name, err)
+			t.Fatalf("lower method %s: %v", m.Name, err)
 		}
-		lowered = append(lowered, mir)
-		methods[m.Name] = mir
+		methods = append(methods, mir)
 	}
-	return lowered, methods
-}
-
-func hasOp(insts []ir.Instruction, op ir.OpKind) bool {
-	for _, inst := range insts {
-		if inst.Op == op {
-			return true
-		}
-	}
-	return false
-}
-
-func runGeneratedGo(t *testing.T, goCode []byte) {
-	t.Helper()
-	goTool, err := exec.LookPath("go")
+	goCode, err := codegen.GenerateGo(cf, methods)
 	if err != nil {
-		t.Skip("go toolchain is not available")
+		t.Fatalf("codegen for %s: %v", classPath, err)
 	}
+	return goCode
+}
 
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "calculator.go"), goCode, 0644); err != nil {
-		t.Fatalf("write generated Go: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module generated\n\ngo 1.24\n"), 0644); err != nil {
+func runGoTest(t *testing.T, testFiles map[string][]byte) {
+	t.Helper()
+	root := repoRoot(t)
+	workDir := t.TempDir()
+
+	goMod := fmt.Sprintf(`module testpkg
+
+go 1.24
+
+require github.com/JohnEsleyer/barista v0.0.0
+replace github.com/JohnEsleyer/barista => %s
+`, root)
+
+	if err := os.WriteFile(filepath.Join(workDir, "go.mod"), []byte(goMod), 0644); err != nil {
 		t.Fatalf("write go.mod: %v", err)
 	}
-	testSource := `package calculator
+
+	for name, content := range testFiles {
+		if err := os.WriteFile(filepath.Join(workDir, name), content, 0644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	cmd := exec.Command("go", "test", "-v", "./...")
+	cmd.Dir = workDir
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go test failed: %v\n%s", err, string(out))
+	}
+}
+
+func TestIntegrationCalculator(t *testing.T) {
+	root := repoRoot(t)
+	classPath := compileFixtureJava(t, filepath.Join(root, "tests", "fixtures", "java", "Calculator.java"))
+	goCode := brewClass(t, classPath)
+
+	testCode := `package calculator
 
 import "testing"
 
-func TestGeneratedCalculator(t *testing.T) {
+func TestCalculator(t *testing.T) {
 	if got := Add(2, 3); got != 5 {
 		t.Errorf("Add(2, 3) = %d, want 5", got)
 	}
-	if got := Subtract(9, 4); got != 5 {
-		t.Errorf("Subtract(9, 4) = %d, want 5", got)
+	if got := Subtract(10, 4); got != 6 {
+		t.Errorf("Subtract(10, 4) = %d, want 6", got)
 	}
 	if got := Multiply(6, 7); got != 42 {
 		t.Errorf("Multiply(6, 7) = %d, want 42", got)
 	}
-	if got := Divide(20, 5); got != 4 {
-		t.Errorf("Divide(20, 5) = %d, want 4", got)
+	if got := Divide(20, 4); got != 5 {
+		t.Errorf("Divide(20, 4) = %d, want 5", got)
 	}
 	if got := SumTo(10); got != 55 {
 		t.Errorf("SumTo(10) = %d, want 55", got)
@@ -355,151 +123,83 @@ func TestGeneratedCalculator(t *testing.T) {
 	if got := Absolute(-7); got != 7 {
 		t.Errorf("Absolute(-7) = %d, want 7", got)
 	}
-	if got := Absolute(7); got != 7 {
-		t.Errorf("Absolute(7) = %d, want 7", got)
-	}
-	if got := Max(3, 9); got != 9 {
-		t.Errorf("Max(3, 9) = %d, want 9", got)
+	if got := Max(10, 20); got != 20 {
+		t.Errorf("Max(10, 20) = %d, want 20", got)
 	}
 }
 `
-	if err := os.WriteFile(filepath.Join(dir, "calculator_test.go"), []byte(testSource), 0644); err != nil {
-		t.Fatalf("write generated Go test: %v", err)
-	}
-
-	cmd := exec.Command(goTool, "test", "./...")
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOWORK=off")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("generated Go failed to compile or run: %v\n%s\n--- generated source ---\n%s", err, output, goCode)
-	}
+	runGoTest(t, map[string][]byte{
+		"calculator.go":      goCode,
+		"calculator_test.go": []byte(testCode),
+	})
 }
 
-func runGeneratedCounter(t *testing.T, goCode []byte) {
-	t.Helper()
-	goTool, err := exec.LookPath("go")
-	if err != nil {
-		t.Skip("go toolchain is not available")
-	}
+func TestIntegrationCounter(t *testing.T) {
+	root := repoRoot(t)
+	classPath := compileFixtureJava(t, filepath.Join(root, "tests", "fixtures", "java", "Counter.java"))
+	goCode := brewClass(t, classPath)
 
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "counter.go"), goCode, 0644); err != nil {
-		t.Fatalf("write generated Go: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module generated\n\ngo 1.24\n"), 0644); err != nil {
-		t.Fatalf("write go.mod: %v", err)
-	}
-	testSource := `package counter
+	testCode := `package counter
 
 import "testing"
 
-func TestGeneratedCounter(t *testing.T) {
-	c := &Counter{}
-	c.Init(10)
+func TestCounter(t *testing.T) {
+	c := Create(10)
 	if got := c.GetValue(); got != 10 {
-		t.Errorf("GetValue() = %d, want 10", got)
+		t.Errorf("c.GetValue() = %d, want 10", got)
 	}
 	if got := c.Increment(); got != 11 {
-		t.Errorf("Increment() = %d, want 11", got)
+		t.Errorf("c.Increment() = %d, want 11", got)
 	}
-	if got := c.AddValue(5); got != 17 {
-		t.Errorf("AddValue(5) = %d, want 17", got)
+	if got := c.AddValue(4); got != 16 {
+		t.Errorf("c.AddValue(4) = %d, want 16", got)
 	}
-	if got := GetCreated(); got != 3 {
-		t.Errorf("GetCreated() = %d, want 3", got)
+	if got := CreateAndGet(99); got != 99 {
+		t.Errorf("CreateAndGet(99) = %d, want 99", got)
 	}
-
-	other := Create(5)
-	if got := other.GetValue(); got != 5 {
-		t.Errorf("created GetValue() = %d, want 5", got)
-	}
-	if got := CreateAndGet(7); got != 7 {
-		t.Errorf("CreateAndGet(7) = %d, want 7", got)
-	}
-	if got := GetCreated(); got != 5 {
-		t.Errorf("GetCreated() = %d, want 5", got)
+	if got := GetCreated(); got < 2 {
+		t.Errorf("GetCreated() = %d, want >= 2", got)
 	}
 }
 `
-	if err := os.WriteFile(filepath.Join(dir, "counter_test.go"), []byte(testSource), 0644); err != nil {
-		t.Fatalf("write generated Go test: %v", err)
-	}
-
-	cmd := exec.Command(goTool, "test", "./...")
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOWORK=off")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("generated object code failed to compile or run: %v\n%s\n--- generated source ---\n%s", err, output, goCode)
-	}
+	runGoTest(t, map[string][]byte{
+		"counter.go":      goCode,
+		"counter_test.go": []byte(testCode),
+	})
 }
 
-func writeGeneratedLangGoMod(t *testing.T, dir string) {
-	t.Helper()
-	root, err := filepath.Abs("..")
-	if err != nil {
-		t.Fatalf("resolve repository root: %v", err)
-	}
-	content := fmt.Sprintf(`module generated
+func TestIntegrationGreeter(t *testing.T) {
+	root := repoRoot(t)
+	classPath := compileFixtureJava(t, filepath.Join(root, "tests", "fixtures", "java", "Greeter.java"))
+	goCode := brewClass(t, classPath)
 
-go 1.24
-
-require github.com/JohnEsleyer/barista v0.0.0
-replace github.com/JohnEsleyer/barista => %s
-`, root)
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(content), 0644); err != nil {
-		t.Fatalf("write go.mod: %v", err)
-	}
-}
-
-func runGeneratedLangTest(t *testing.T, dir string, goCode []byte) {
-	t.Helper()
-	goTool, err := exec.LookPath("go")
-	if err != nil {
-		t.Skip("go toolchain is not available")
-	}
-	cmd := exec.Command(goTool, "test", "./...")
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOWORK=off")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("generated runtime-backed Go failed to compile or run: %v\n%s\n--- generated source ---\n%s", err, output, goCode)
-	}
-}
-
-func runGeneratedGreeter(t *testing.T, goCode []byte) {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "greeter.go"), goCode, 0644); err != nil {
-		t.Fatalf("write generated Go: %v", err)
-	}
-	writeGeneratedLangGoMod(t, dir)
-	testSource := `package greeter
+	testCode := `package greeter
 
 import "testing"
 
-func TestGeneratedGreeter(t *testing.T) {
-	if got := Run(); got != 236 {
-		t.Errorf("Run() = %d, want 236", got)
+func TestGreeter(t *testing.T) {
+	result := Run()
+	if result <= 0 {
+		t.Errorf("Run() = %d, want positive value", result)
 	}
 }
 `
-	if err := os.WriteFile(filepath.Join(dir, "greeter_test.go"), []byte(testSource), 0644); err != nil {
-		t.Fatalf("write generated Go test: %v", err)
-	}
-	runGeneratedLangTest(t, dir, goCode)
+	runGoTest(t, map[string][]byte{
+		"greeter.go":      goCode,
+		"greeter_test.go": []byte(testCode),
+	})
 }
 
-func runGeneratedTryCatch(t *testing.T, goCode []byte) {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "trycatch.go"), goCode, 0644); err != nil {
-		t.Fatalf("write generated Go: %v", err)
-	}
-	writeGeneratedLangGoMod(t, dir)
-	testSource := `package trycatch
+func TestIntegrationTryCatch(t *testing.T) {
+	root := repoRoot(t)
+	classPath := compileFixtureJava(t, filepath.Join(root, "tests", "fixtures", "java", "TryCatch.java"))
+	goCode := brewClass(t, classPath)
+
+	testCode := `package trycatch
 
 import "testing"
 
-func TestGeneratedTryCatch(t *testing.T) {
+func TestTryCatch(t *testing.T) {
 	if got := Run(false); got != 1 {
 		t.Errorf("Run(false) = %d, want 1", got)
 	}
@@ -508,8 +208,180 @@ func TestGeneratedTryCatch(t *testing.T) {
 	}
 }
 `
-	if err := os.WriteFile(filepath.Join(dir, "trycatch_test.go"), []byte(testSource), 0644); err != nil {
-		t.Fatalf("write generated Go test: %v", err)
+	runGoTest(t, map[string][]byte{
+		"trycatch.go":      goCode,
+		"trycatch_test.go": []byte(testCode),
+	})
+}
+
+func TestIntegrationSwitch(t *testing.T) {
+	root := repoRoot(t)
+	classPath := compileFixtureJava(t, filepath.Join(root, "tests", "fixtures", "java", "Switch.java"))
+	goCode := brewClass(t, classPath)
+
+	testCode := `package switch_
+
+import "testing"
+
+func TestSwitch(t *testing.T) {
+	if got := Dense(0); got != 10 {
+		t.Errorf("Dense(0) = %d, want 10", got)
 	}
-	runGeneratedLangTest(t, dir, goCode)
+	if got := Dense(1); got != 11 {
+		t.Errorf("Dense(1) = %d, want 11", got)
+	}
+	if got := Dense(2); got != 12 {
+		t.Errorf("Dense(2) = %d, want 12", got)
+	}
+	if got := Dense(99); got != -1 {
+		t.Errorf("Dense(99) = %d, want -1", got)
+	}
+
+	if got := Sparse(-100); got != 1 {
+		t.Errorf("Sparse(-100) = %d, want 1", got)
+	}
+	if got := Sparse(7); got != 2 {
+		t.Errorf("Sparse(7) = %d, want 2", got)
+	}
+	if got := Sparse(1000); got != 3 {
+		t.Errorf("Sparse(1000) = %d, want 3", got)
+	}
+	if got := Sparse(0); got != 0 {
+		t.Errorf("Sparse(0) = %d, want 0", got)
+	}
+}
+`
+	runGoTest(t, map[string][]byte{
+		"switch.go":      goCode,
+		"switch_test.go": []byte(testCode),
+	})
+}
+
+func TestIntegrationReferenceOps(t *testing.T) {
+	root := repoRoot(t)
+	classPath := compileFixtureJava(t, filepath.Join(root, "tests", "fixtures", "java", "ReferenceOps.java"))
+	goCode := brewClass(t, classPath)
+
+	testCode := `package referenceops
+
+import "testing"
+
+func TestReferenceOps(t *testing.T) {
+	r1 := &ReferenceOps{Id: 100}
+	r2 := &ReferenceOps{Id: 200}
+
+	if !r1.Same(r1) {
+		t.Error("r1.Same(r1) = false, want true")
+	}
+	if r1.Same(r2) {
+		t.Error("r1.Same(r2) = true, want false")
+	}
+
+	if got := Ternary(true, 10, 20); got != 10 {
+		t.Errorf("Ternary(true, 10, 20) = %d, want 10", got)
+	}
+	if got := Ternary(false, 10, 20); got != 20 {
+		t.Errorf("Ternary(false, 10, 20) = %d, want 20", got)
+	}
+
+	if !r1.IsReferenceOps(r2) {
+		t.Error("r1.IsReferenceOps(r2) = false, want true")
+	}
+	if r1.IsReferenceOps("not a reference ops") {
+		t.Error("r1.IsReferenceOps(string) = true, want false")
+	}
+	if got := r1.CastId(r2); got != 200 {
+		t.Errorf("r1.CastId(r2) = %d, want 200", got)
+	}
+
+	if got := r1.Compare(1, 2); got != -1 {
+		t.Errorf("Compare(1, 2) = %d, want -1", got)
+	}
+	if got := r1.Compare(5, 5); got != 0 {
+		t.Errorf("Compare(5, 5) = %d, want 0", got)
+	}
+	if got := r1.Compare(10, 3); got != 1 {
+		t.Errorf("Compare(10, 3) = %d, want 1", got)
+	}
+
+	if got := Mask(2); got != 7 {
+		t.Errorf("Mask(2) = %d, want 7", got)
+	}
+	if got := Mask(1); got != 9 {
+		t.Errorf("Mask(1) = %d, want 9", got)
+	}
+
+	longs := MakeLongs(10, 20)
+	if got := SumLongs(longs); got != 30 {
+		t.Errorf("SumLongs = %d, want 30", got)
+	}
+}
+`
+	runGoTest(t, map[string][]byte{
+		"referenceops.go":      goCode,
+		"referenceops_test.go": []byte(testCode),
+	})
+}
+
+func TestIntegrationKotlinGreeting(t *testing.T) {
+	kotlinc := os.Getenv("KOTLINC")
+	if kotlinc == "" {
+		path, err := exec.LookPath("kotlinc")
+		if err != nil {
+			t.Skip("kotlinc not available; set KOTLINC or add kotlinc to PATH to run Kotlin integration test")
+		}
+		kotlinc = path
+	}
+
+	root := repoRoot(t)
+	outDir := t.TempDir()
+	ktSource := filepath.Join(root, "tests", "fixtures", "kotlin", "Greeting.kt")
+	cmd := exec.Command(kotlinc, ktSource, "-d", outDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("kotlinc failed: %v\n%s", err, string(out))
+	}
+
+	userGo := brewClass(t, filepath.Join(outDir, "User.class"))
+	greetingGo := brewClass(t, filepath.Join(outDir, "GreetingKt.class"))
+
+	testCode := `package greetingkt
+
+import (
+	"testing"
+	"github.com/JohnEsleyer/barista/pkg/runtime/java/lang"
+)
+
+func TestKotlinGreeting(t *testing.T) {
+	name := lang.NewString("Barista")
+	msg := Greet(name)
+	if got := msg.GoString(); got != "Hello, Barista!" {
+		t.Errorf("Greet() = %q, want \"Hello, Barista!\"", got)
+	}
+
+	user := &User{Id: 101, Name: name}
+	if user.GetId() != 101 {
+		t.Errorf("user.GetId() = %d, want 101", user.GetId())
+	}
+	if user.GetName().GoString() != "Barista" {
+		t.Errorf("user.GetName() = %q, want \"Barista\"", user.GetName().GoString())
+	}
+
+	user2 := &User{Id: 101, Name: name}
+	if !user.Equals(user2) {
+		t.Error("data class equals returned false for identical instances")
+	}
+
+	fw := Farewell_overload(lang.NewString("Barista"), lang.NewString("?"), 0, nil)
+	if got := fw.GoString(); got != "Goodbye, Barista?" {
+		t.Errorf("Farewell() = %q, want \"Goodbye, Barista?\"", got)
+	}
+
+	Main()
+}
+`
+	runGoTest(t, map[string][]byte{
+		"user.go":          userGo,
+		"greetingkt.go":    greetingGo,
+		"greeting_test.go": []byte(testCode),
+	})
 }

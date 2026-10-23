@@ -67,6 +67,15 @@ func (b *StringBuilder) AppendAny(value any) *StringBuilder {
 	return b
 }
 
+// AppendChar appends a JVM char (a UTF-16 code unit carried as int32).
+func (b *StringBuilder) AppendChar(value int32) *StringBuilder {
+	if b == nil {
+		panic(NewNullPointerException(NewString("StringBuilder is null")))
+	}
+	b.builder.WriteRune(rune(value))
+	return b
+}
+
 // Length returns the number of bytes currently buffered.
 func (b *StringBuilder) Length() int32 {
 	if b == nil {

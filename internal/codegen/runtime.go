@@ -12,7 +12,6 @@ func isRuntimeClass(internalName string) bool {
 	return ok
 }
 
-// runtimeMethodName maps a JVM runtime method to the Go shim method name.
 func runtimeMethodName(owner, name, descriptor string) string {
 	if name == "<init>" {
 		return "Init"
@@ -48,6 +47,19 @@ func runtimeMethodName(owner, name, descriptor string) string {
 			return "Substring"
 		case "concat":
 			return "Concat"
+		case "hashCode":
+			return "HashCode"
+		case "toString":
+			return "ToString"
+		}
+	case "java/lang/Long":
+		switch name {
+		case "hashCode":
+			return "HashCode"
+		case "equals":
+			return "Equals"
+		case "longValue":
+			return "LongValue"
 		case "toString":
 			return "ToString"
 		}
@@ -61,7 +73,8 @@ func runtimeMethodName(owner, name, descriptor string) string {
 			return "ToString"
 		}
 	case "java/lang/Throwable", "java/lang/Exception", "java/lang/RuntimeException",
-		"java/lang/NullPointerException", "java/lang/IndexOutOfBoundsException":
+		"java/lang/NullPointerException", "java/lang/IndexOutOfBoundsException",
+		"java/lang/ClassCastException":
 		switch name {
 		case "getMessage":
 			return "GetMessage"
@@ -94,6 +107,9 @@ func stringBuilderAppendName(descriptor string) string {
 		if md.Params[0] == "I" {
 			return "AppendInt"
 		}
+		if md.Params[0] == "C" {
+			return "AppendChar"
+		}
 	}
 	return "AppendAny"
 }
@@ -121,7 +137,8 @@ func needsLang(cf *classfile.ClassFile, methods []*ir.MethodIR) bool {
 		}
 		for _, inst := range mir.Instructions {
 			switch inst.Op {
-			case ir.OpConstString, ir.OpConstClass, ir.OpLoadException, ir.OpArrayLoad, ir.OpArrayStore:
+			case ir.OpConstString, ir.OpConstClass, ir.OpLoadException, ir.OpArrayLoad, ir.OpArrayStore,
+				ir.OpCheckCast, ir.OpInstanceOf, ir.OpCmpLong:
 				return true
 			case ir.OpNewArray, ir.OpANewArray:
 				if usesLangDescriptor(inst.Descriptor) {
@@ -131,7 +148,17 @@ func needsLang(cf *classfile.ClassFile, methods []*ir.MethodIR) bool {
 				if isRuntimeClass(inst.OwnerClass) {
 					return true
 				}
-			case ir.OpInvokeVirtual, ir.OpInvokeSpecial, ir.OpInvokeStatic:
+			case ir.OpInvokeVirtual, ir.OpInvokeSpecial:
+				if inst.OwnerClass == "java/lang/Object" && inst.MemberName != "<init>" {
+					return true
+				}
+				if inst.OwnerClass != "java/lang/Object" && isRuntimeClass(inst.OwnerClass) {
+					return true
+				}
+			case ir.OpInvokeStatic:
+				if inst.OwnerClass == "kotlin/io/ConsoleKt" {
+					return true
+				}
 				if inst.OwnerClass != "java/lang/Object" && isRuntimeClass(inst.OwnerClass) {
 					return true
 				}
@@ -153,7 +180,49 @@ func usesLangDescriptor(desc string) bool {
 		return usesLangDescriptor(desc[1:])
 	}
 	if strings.HasPrefix(desc, "L") && strings.HasSuffix(desc, ";") {
-		return isRuntimeClass(desc[1 : len(desc)-1])
+		raw := desc[1 : len(desc)-1]
+		if raw == "java/lang/Object" {
+			return false
+		}
+		return isRuntimeClass(raw)
+	}
+	return false
+}
+
+const kotlinRuntimeImport = "github.com/JohnEsleyer/barista/pkg/runtime/kotlin/jvm"
+
+func isKotlinIntrinsicClass(owner string) bool {
+	return owner == "kotlin/jvm/internal/Intrinsics"
+}
+
+func kotlinIntrinsicName(name string) (string, bool) {
+	switch name {
+	case "checkNotNullParameter", "checkNotNullExpressionValue":
+		return "CheckNotNullParameter", true
+	case "checkNotNull":
+		return "CheckNotNull", true
+	case "areEqual":
+		return "AreEqual", true
+	case "throwUninitializedPropertyAccessException":
+		return "ThrowUninitializedPropertyAccessException", true
+	case "throwParameterIsNullException":
+		return "ThrowParameterIsNullException", true
+	case "stringPlus":
+		return "StringPlus", true
+	default:
+		return "", false
+	}
+}
+
+func needsKotlin(methods []*ir.MethodIR) bool {
+	for _, mir := range methods {
+		for _, inst := range mir.Instructions {
+			if inst.Op == ir.OpInvokeStatic && isKotlinIntrinsicClass(inst.OwnerClass) {
+				if _, ok := kotlinIntrinsicName(inst.MemberName); ok {
+					return true
+				}
+			}
+		}
 	}
 	return false
 }

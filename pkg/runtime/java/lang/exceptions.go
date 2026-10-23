@@ -109,6 +109,16 @@ func NewIndexOutOfBoundsException(message *String) *IndexOutOfBoundsException {
 	return &IndexOutOfBoundsException{RuntimeException: RuntimeException{Exception: Exception{Throwable: Throwable{Message: message}}}}
 }
 
+// ClassCastException is the native shim for java.lang.ClassCastException.
+type ClassCastException struct {
+	RuntimeException
+}
+
+// NewClassCastException constructs a ClassCastException.
+func NewClassCastException(message *String) *ClassCastException {
+	return &ClassCastException{RuntimeException: RuntimeException{Exception: Exception{Throwable: Throwable{Message: message}}}}
+}
+
 func throwableClassName(t *Throwable) string {
 	if t == nil {
 		return "java.lang.Throwable"
@@ -132,6 +142,8 @@ func AsThrowable(value any) *Throwable {
 		return &v.RuntimeException.Exception.Throwable
 	case *IndexOutOfBoundsException:
 		return &v.RuntimeException.Exception.Throwable
+	case *ClassCastException:
+		return &v.RuntimeException.Exception.Throwable
 	default:
 		return nil
 	}
@@ -148,14 +160,14 @@ func MatchesException(value any, className string) bool {
 		return AsThrowable(value) != nil
 	case "java/lang/Exception":
 		switch value.(type) {
-		case *Exception, *RuntimeException, *NullPointerException, *IndexOutOfBoundsException:
+		case *Exception, *RuntimeException, *NullPointerException, *IndexOutOfBoundsException, *ClassCastException:
 			return true
 		default:
 			return false
 		}
 	case "java/lang/RuntimeException":
 		switch value.(type) {
-		case *RuntimeException, *NullPointerException, *IndexOutOfBoundsException:
+		case *RuntimeException, *NullPointerException, *IndexOutOfBoundsException, *ClassCastException:
 			return true
 		default:
 			return false
@@ -165,6 +177,9 @@ func MatchesException(value any, className string) bool {
 		return ok
 	case "java/lang/IndexOutOfBoundsException":
 		_, ok := value.(*IndexOutOfBoundsException)
+		return ok
+	case "java/lang/ClassCastException":
+		_, ok := value.(*ClassCastException)
 		return ok
 	default:
 		return false

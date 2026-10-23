@@ -5,8 +5,6 @@ import (
 	"strings"
 )
 
-// runtimeTypeNames maps JVM runtime classes to their Go shim type names in the
-// lang package.
 var runtimeTypeNames = map[string]string{
 	"java/lang/Object":                    "Object",
 	"java/lang/String":                    "String",
@@ -17,6 +15,8 @@ var runtimeTypeNames = map[string]string{
 	"java/lang/RuntimeException":          "RuntimeException",
 	"java/lang/NullPointerException":      "NullPointerException",
 	"java/lang/IndexOutOfBoundsException": "IndexOutOfBoundsException",
+	"java/lang/ClassCastException":        "ClassCastException",
+	"java/lang/Long":                      "Long",
 	"java/io/PrintStream":                 "PrintStream",
 }
 
@@ -50,6 +50,8 @@ func DescriptorToGoType(desc string) ast.Expr {
 		return ast.NewIdent("float64")
 	case "V":
 		return nil
+	case "Ljava/lang/Object;", "Lkotlin/jvm/internal/DefaultConstructorMarker;":
+		return ast.NewIdent("any")
 	default:
 		if strings.HasPrefix(desc, "L") && strings.HasSuffix(desc, ";") {
 			raw := desc[1 : len(desc)-1]
@@ -65,8 +67,6 @@ func DescriptorToGoType(desc string) ast.Expr {
 	}
 }
 
-// CleanClassName turns the JVM internal name into an exported Go identifier.
-// For example "com/example/User" becomes "ComExampleUser".
 func CleanClassName(internalName string) string {
 	if internalName == "" {
 		return "Class"
@@ -87,14 +87,10 @@ func CleanClassName(internalName string) string {
 	return name
 }
 
-// CleanMemberName turns a JVM field or method name into an exported Go name.
 func CleanMemberName(name string) string {
 	return exportedName(name)
 }
 
-// staticFieldName creates a package-level name for a JVM static field. The
-// class prefix prevents collisions with generated functions and instance
-// fields, which live in different Go namespaces.
 func staticFieldName(owner, name string) string {
 	field := exportedName(name)
 	if owner == "" {
