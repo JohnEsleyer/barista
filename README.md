@@ -14,7 +14,7 @@
 
 You keep the language and toolchain you already love. You leave behind the JVM's operational baggage: no 200MB base runtime, no JIT warm-up spikes, no JRE packaging, and no guessing whether your app will fit on a $4/month box. Write Java or Kotlin; ship one native binary.
 
-> **Status:** Phase 6 complete. Barista features an end-to-end ahead-of-time pipeline: disassembling (`grind`), Go transpilation (`brew`), stripped static native binary compilation with cross-compilation (`build`), and instant memory compilation and execution (`serve`), accompanied by a real-time terminal progress bar. Kotlin `object` singletons, coroutines, and cross-class dispatch remain deferred; see the [roadmap](#roadmap).
+> **Status:** Barista is under active development and features an end-to-end ahead-of-time pipeline: disassembling (`grind`), Go transpilation (`brew`), stripped static native binary compilation with cross-compilation (`build`), and instant memory compilation and execution (`serve`), accompanied by a real-time terminal progress bar. Kotlin `object` singletons, coroutines, and cross-class dispatch remain deferred; see the [known limitations](#known-limitations).
 >
 > **Detailed progress:** [`docs/progress.md`](docs/progress.md) is the canonical tracker for completed capabilities, known limitations, test status, and the next task.
 
@@ -272,7 +272,7 @@ javac -d tests/fixtures/out tests/fixtures/java/HelloBarista.java
 ./bin/barista serve tests/fixtures/out/HelloBarista.class World
 ```
 
-Phase 6 completes the production tooling: `build` emits stripped, statically linked binaries (`-ldflags="-s -w"`, `CGO_ENABLED=0`) and `serve` compiles in a temporary workspace and runs the result immediately. The supported lowering covers static and instance methods using `int`/`long` arithmetic, conditionals, loops, operand-stack PHI joins, objects, instance and static fields, constructors, same-class dispatch, strings, arrays, `System.out`, caught runtime exceptions, dense/sparse switches, `checkcast`, `instanceof`, dynamic `Object` methods, Kotlin `Intrinsics`, `invokeinterface`, sockets, and `net/http`-backed HTTP servers. Cross-class dispatch, inheritance, user-defined exception classes, Kotlin `object` singletons, and coroutines are skipped or rejected with a diagnostic until their phases land.
+Barista's production tooling is fully wired: `build` emits stripped, statically linked binaries (`-ldflags="-s -w"`, `CGO_ENABLED=0`) and `serve` compiles in a temporary workspace and runs the result immediately. The supported lowering covers static and instance methods using `int`/`long` arithmetic, conditionals, loops, operand-stack PHI joins, objects, instance and static fields, constructors, same-class dispatch, strings, arrays, `System.out`, caught runtime exceptions, dense/sparse switches, `checkcast`, `instanceof`, dynamic `Object` methods, Kotlin `Intrinsics`, `invokeinterface`, sockets, and `net/http`-backed HTTP servers. Cross-class dispatch, inheritance, user-defined exception classes, Kotlin `object` singletons, and coroutines are skipped or rejected with a diagnostic until support lands.
 
 ---
 
@@ -290,25 +290,18 @@ Kotlin compiles to standard JVM bytecode, so the parser needs no Kotlin-specific
 
 ---
 
-## Roadmap
+## Known Limitations
 
-| Phase | Goal | Key work | Status |
-| --- | --- | --- | --- |
-| 1 | Primitive calculator | Class-file parsing, constant pool, core integer opcodes, branch/loop lowering, `go/ast` output, `grind`/`brew` | done |
-| 2 | Objects & control flow | `new`, `dup`, field access, constructors, object model, basic-block partitioning | done |
-| 3 | Runtime & exceptions | Exception tables, `String`/`StringBuilder`, arrays, `System.out`, runtime shims | done |
-| 4 | Kotlin engine | Switch bytecodes, Kotlin intrinsics, Longs, casts, default masks, data classes | done |
-| 5 | Networking | `net/http`-backed server pipelines, socket interception, REST fixture | done |
-| 6 | Production tooling | `build`, `serve`, stripped static binaries, cross-compilation, progress UI | done |
+Barista compiles a single class at a time and does not yet model the full JVM runtime. Current gaps:
 
-### Immediate next steps
+- Cross-class dispatch, inheritance, and interfaces are not resolved beyond same-class calls and runtime shims.
+- User-defined exception classes are not supported; standard `java.lang` exception types are.
+- Kotlin `object` singletons, `Companion` objects, enums, property delegates, and full `DefaultConstructorMarker` semantics are not supported.
+- Coroutines are not bridged to goroutines and channels yet.
+- `java.util.ArrayList` is not implemented.
+- `.jar` archive input is not supported; pass individual `.class` files.
 
-1. Implement Kotlin `object` singletons, `Companion`, enums, and full `DefaultConstructorMarker` constructor semantics.
-2. Add a coroutine fixture and the goroutine/channel bridge.
-3. Add cross-class dispatch and inheritance support so Kotlin stdlib calls can resolve beyond runtime shims.
-4. Expand casts/`instanceof` to model generated inheritance and interfaces.
-
-No Phase 7 is defined yet; the deferred Kotlin and cross-class items above are the highest-value next work.
+See [`docs/progress.md`](docs/progress.md) for the canonical tracker of implementation status and test coverage.
 
 ---
 
@@ -318,7 +311,7 @@ No Phase 7 is defined yet; the deferred Kotlin and cross-class items above are t
 2. **Go-native memory.** No custom allocator, write barrier, or GC; pointers map directly onto Go's heap.
 3. **Deterministic output.** Same input bytecode and configuration should always produce the same Go source.
 4. **Fail loudly.** Unsupported opcodes and malformed class files produce actionable diagnostics rather than silently wrong code.
-5. **Incremental correctness.** Each phase is verified end-to-end with compiled fixtures before the next begins.
+5. **Incremental correctness.** Each capability is verified end-to-end with compiled fixtures before the next is added.
 
 ---
 
