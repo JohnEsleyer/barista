@@ -19,8 +19,14 @@ const langRuntimeImport = "github.com/JohnEsleyer/barista/pkg/runtime/java/lang"
 
 // GenerateGo translates a parsed ClassFile and lowered IR into clean Go code.
 func GenerateGo(cf *classfile.ClassFile, methods []*ir.MethodIR) ([]byte, error) {
+	return GenerateGoWithPackage(cf, methods, packageName(cf.ThisClass))
+}
+
+// GenerateGoWithPackage translates a parsed ClassFile and lowered IR into clean Go code
+// with a specified Go package name.
+func GenerateGoWithPackage(cf *classfile.ClassFile, methods []*ir.MethodIR, pkgName string) ([]byte, error) {
 	file := &ast.File{
-		Name:  ast.NewIdent(packageName(cf.ThisClass)),
+		Name:  ast.NewIdent(pkgName),
 		Decls: make([]ast.Decl, 0),
 	}
 
@@ -378,14 +384,40 @@ func methodGoName(name string) string {
 }
 
 func methodKey(owner, name, descriptor string) string {
+	return MethodKey(owner, name, descriptor)
+}
+
+// MethodKey creates the lookup key for method resolution.
+func MethodKey(owner, name, descriptor string) string {
 	return owner + "|" + name + "|" + descriptor
+}
+
+// ResolveMethodNames builds a lookup table of Go method names for a class and its methods.
+func ResolveMethodNames(thisClass string, methods []*ir.MethodIR) map[string]string {
+	usedNames := make(map[string]bool)
+	methodNames := make(map[string]string)
+	for _, mir := range methods {
+		owner := mir.OwnerClass
+		if owner == "" {
+			owner = thisClass
+		}
+		name := methodGoName(mir.Name)
+		if name != "init" {
+			if usedNames[name] {
+				name = uniqueName(name, mir.Descriptor, usedNames)
+			}
+			usedNames[name] = true
+		}
+		methodNames[MethodKey(owner, mir.Name, mir.Descriptor)] = name
+	}
+	return methodNames
 }
 
 func resolveMethodName(names map[string]string, owner, name, descriptor string) string {
 	if name == "<clinit>" {
 		return "init"
 	}
-	if resolved, ok := names[methodKey(owner, name, descriptor)]; ok {
+	if resolved, ok := names[MethodKey(owner, name, descriptor)]; ok {
 		return resolved
 	}
 	if name == "<init>" {
@@ -395,6 +427,11 @@ func resolveMethodName(names map[string]string, owner, name, descriptor string) 
 }
 
 func packageName(internalName string) string {
+	return PackageName(internalName)
+}
+
+// PackageName computes the Go package name from a JVM internal class name.
+func PackageName(internalName string) string {
 	if idx := strings.LastIndex(internalName, "/"); idx >= 0 {
 		internalName = internalName[idx+1:]
 	}

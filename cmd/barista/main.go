@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,9 +11,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/JohnEsleyer/barista/internal/builder"
 	"github.com/JohnEsleyer/barista/internal/classfile"
 	"github.com/JohnEsleyer/barista/internal/codegen"
 	"github.com/JohnEsleyer/barista/internal/ir"
+	"github.com/JohnEsleyer/barista/internal/ui"
 )
 
 const version = "0.1.0-dev"
@@ -34,9 +37,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 	case "grind":
 		return runGrind(args[1:], stdout)
 	case "brew":
-		return runBrew(args[1:], stdout)
+		return runBrew(args[1:], stdout, stderr)
+	case "build":
+		return runBuild(args[1:], stdout, stderr)
 	case "serve":
-		return runServe(args[1:], stdout)
+		return runServe(args[1:], stdout, stderr)
 	case "version", "-v", "--version":
 		fmt.Fprintf(stdout, "barista %s\n", version)
 		return nil
@@ -56,11 +61,12 @@ Usage:
   barista <command> [options]
 
 Commands:
-  grind <input.class>   Disassemble a class file and print Barista IR
-  brew  <input.class>   Compile a class file to idiomatic Go source
-  serve <input>         Compile and run an application immediately (planned)
-  version               Print the Barista version
-  help                  Show this help text
+  grind <input.class>            Disassemble a class file and print Barista IR
+  brew  [-o output.go] <input>   Compile a class file to idiomatic Go source
+  build [options] <input.class>  Compile a class file to a stripped static binary
+  serve [options] <input> [args] Compile in memory and execute immediately
+  version                        Print the Barista version
+  help                           Show this help text
 
 Run "barista <command> -h" for command-specific options.
 `)
@@ -129,12 +135,13 @@ func runGrind(args []string, stdout io.Writer) error {
 	return nil
 }
 
-func runBrew(args []string, stdout io.Writer) error {
+func runBrew(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("brew", flag.ContinueOnError)
-	fs.SetOutput(stdout)
+	fs.SetOutput(stderr)
 	outPath := fs.String("o", "", "output .go file path (defaults to stdout)")
+	quiet := fs.Bool("q", false, "suppress progress indicators")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: barista brew [-o output.go] <input.class>")
+		fmt.Fprintln(fs.Output(), "Usage: barista brew [-o output.go] [-q] <input.class>")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -146,9 +153,19 @@ func runBrew(args []string, stdout io.Writer) error {
 	}
 
 	classPath := fs.Arg(0)
+	var pb *ui.ProgressBar
+	if *outPath != "" && !*quiet {
+		pb = ui.NewProgressBar(stderr, 3)
+		pb.SetStep(1, "Grinding classfile and constant pool...")
+	}
+
 	cf, err := classfile.ParseClassFilePath(classPath)
 	if err != nil {
 		return fmt.Errorf("brew failed to parse class: %w", err)
+	}
+
+	if pb != nil {
+		pb.SetStep(2, "Brewing SSA intermediate representation...")
 	}
 
 	loweredMethods := make([]*ir.MethodIR, 0)
@@ -162,6 +179,10 @@ func runBrew(args []string, stdout io.Writer) error {
 			return fmt.Errorf("failed compiling method %s: %w", m.Name, err)
 		}
 		loweredMethods = append(loweredMethods, mir)
+	}
+
+	if pb != nil {
+		pb.SetStep(3, "Synthesizing Go source...")
 	}
 
 	goCode, err := codegen.GenerateGo(cf, loweredMethods)
@@ -178,18 +199,24 @@ func runBrew(args []string, stdout io.Writer) error {
 		if err := os.WriteFile(*outPath, goCode, 0644); err != nil {
 			return fmt.Errorf("failed to write output: %w", err)
 		}
-		fmt.Fprintf(stdout, "Brewed %s -> %s\n", classPath, *outPath)
+		if pb != nil {
+			pb.Complete(fmt.Sprintf("Brewed %s -> %s (%s)", classPath, *outPath, ui.FormatBytes(int64(len(goCode)))))
+		}
 	} else {
 		fmt.Fprintln(stdout, strings.TrimSpace(string(goCode)))
 	}
 	return nil
 }
 
-func runServe(args []string, stdout io.Writer) error {
-	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	fs.SetOutput(stdout)
+func runBuild(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("build", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	outPath := fs.String("o", "", "output binary path (defaults to lowercase class name)")
+	target := fs.String("target", "", "cross-compilation target (e.g. linux/amd64, darwin/arm64, windows/amd64)")
+	entry := fs.String("entry", "", "custom entrypoint method name (default: auto-detect main)")
+	quiet := fs.Bool("q", false, "quiet mode (suppress progress bar)")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: barista serve <input.class>")
+		fmt.Fprintln(fs.Output(), "Usage: barista build [-o binary] [-target os/arch] [-entry method] [-q] <input.class>")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -197,7 +224,96 @@ func runServe(args []string, stdout io.Writer) error {
 	}
 	if fs.NArg() != 1 {
 		fs.Usage()
+		return errors.New("build requires a path to a .class file")
+	}
+
+	classPath := fs.Arg(0)
+	cf, err := classfile.ParseClassFilePath(classPath)
+	if err != nil {
+		return fmt.Errorf("failed to parse classfile: %w", err)
+	}
+
+	var pb *ui.ProgressBar
+	var onProgress func(step int, total int, message string)
+	if !*quiet {
+		pb = ui.NewProgressBar(stderr, 4)
+		onProgress = func(step int, total int, message string) {
+			pb.SetStep(step, message)
+		}
+	}
+
+	res, err := builder.Build(builder.BuildOptions{
+		ClassFile:   cf,
+		OutputPath:  *outPath,
+		TargetOS:    *target,
+		Static:      true,
+		Entrypoint:  *entry,
+		OnProgress:  onProgress,
+	})
+	if err != nil {
+		return err
+	}
+
+	if pb != nil {
+		pb.Complete(fmt.Sprintf("Brewed static binary in %s", ui.FormatDuration(res.Duration)))
+		ui.PrintCard(stdout, ui.CardDetails{
+			Title:    "Freshly Brewed Native Binary",
+			Class:    fmt.Sprintf("%s (v%d.%d)", cf.ThisClass, cf.MajorVersion, cf.MinorVersion),
+			Output:   res.BinaryPath,
+			Size:     fmt.Sprintf("%s (stripped -s -w static executable)", ui.FormatBytes(res.Size)),
+			Target:   fmt.Sprintf("%s/%s (CGO_ENABLED=0)", res.TargetOS, res.TargetArch),
+			Duration: ui.FormatDuration(res.Duration),
+		})
+	}
+	return nil
+}
+
+func runServe(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	entry := fs.String("entry", "", "custom entrypoint method name (default: auto-detect main)")
+	quiet := fs.Bool("q", false, "quiet mode (suppress progress bar)")
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "Usage: barista serve [-entry method] [-q] <input.class> [args...]")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() < 1 {
+		fs.Usage()
 		return errors.New("serve requires a path to a .class file")
 	}
-	return errors.New("serve is not implemented yet")
+
+	classPath := fs.Arg(0)
+	appArgs := fs.Args()[1:]
+
+	cf, err := classfile.ParseClassFilePath(classPath)
+	if err != nil {
+		return fmt.Errorf("failed to parse classfile: %w", err)
+	}
+
+	var pb *ui.ProgressBar
+	var onProgress func(step int, total int, message string)
+	if !*quiet {
+		pb = ui.NewProgressBar(stderr, 4)
+		onProgress = func(step int, total int, message string) {
+			pb.SetStep(step, message)
+		}
+	}
+
+	opts := builder.BuildOptions{
+		ClassFile:  cf,
+		Static:     true,
+		Entrypoint: *entry,
+		OnProgress: onProgress,
+	}
+
+	if pb != nil {
+		defer func() {
+			pb.Complete("Serving application...")
+		}()
+	}
+
+	return builder.ServeWithIO(context.Background(), opts, appArgs, stdout, stderr, os.Stdin)
 }

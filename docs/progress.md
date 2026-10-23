@@ -3,8 +3,8 @@
 This is the canonical tracker for Barista's implementation progress. Update it at the end of every meaningful change so a new contributor can understand what works, what does not, and what comes next without reading the entire commit history.
 
 **Last updated:** 2026-10-24
-**Current phase:** Phase 5 complete; Phase 6 next
-**Latest implementation commit:** Implement Phase 5 networking, socket interception, and net/http pipeline
+**Current phase:** Phase 6 complete
+**Latest implementation commit:** Implement Phase 6 production tooling, build command, serve command, and satisfying blue progress CLI
 
 ---
 
@@ -17,12 +17,12 @@ This is the canonical tracker for Barista's implementation progress. Update it a
 | Tests | Passing | `go test ./...` |
 | Race detector | Passing | `go test -race ./...` |
 | Class-file parsing | Complete | `internal/classfile` |
-| IR lowering | Complete for Phase 5 (includes PHI joins, switches, invokeinterface) | `internal/ir` |
+| IR lowering | Complete for Phase 5 & 6 (includes PHI joins, switches, invokeinterface) | `internal/ir` |
 | Control flow graph | Basic blocks, switch edges, predecessors, successors | `internal/ir/block.go` |
 | Go code generation | Objects, fields, switches, casts, dynamic Object dispatch, net/http pipelines | `internal/codegen` |
 | Runtime shims | `Object`, `String`, `StringBuilder`, `Throwable`, `System`, `Long`, `Intrinsics`, `HttpServer`, `Socket`, `Streams` | `pkg/runtime` |
-| CLI | `grind` and `brew` work for Phase 5 classes; `serve` is next | `cmd/barista` |
-| End-to-end fixtures | Calculator, Counter, Greeter, TryCatch, Switch, ReferenceOps, Greeting, RestServer | `tests/integration_test.go` |
+| CLI | `grind`, `brew`, `build`, and `serve` fully implemented with satisfying blue progress bar | `cmd/barista` |
+| End-to-end fixtures | Calculator, Counter, Greeter, TryCatch, Switch, ReferenceOps, Greeting, RestServer, HelloBarista | `tests/integration_test.go` |
 
 ---
 
@@ -85,7 +85,10 @@ This is the canonical tracker for Barista's implementation progress. Update it a
 - [x] `String.getBytes()` and byte-array string constructors
 - [x] Full REST fixture (`RestServer.java`) handling GET, POST, headers, and 404s
 
-### Phase 6 — Production Tooling: Planned
-- [ ] `barista serve` command
-- [ ] Invoke `go build -ldflags="-s -w"`
-- [ ] Static linking and cross-compilation packaging
+### Phase 6 — Production Tooling: Complete
+- [x] `barista serve` command with immediate ahead-of-time memory compilation and execution
+- [x] Statically linked, stripped binary compilation via `go build -ldflags="-s -w"` and `CGO_ENABLED=0`
+- [x] Cross-compilation target packaging (`-target <os/arch>`)
+- [x] `barista build` CLI command with formatted summary card
+- [x] Embedded, self-contained runtime shims using Go `embed.FS`
+- [x] Satisfying blue progress bar (`internal/ui`) with TTY auto-detection and duration timing
