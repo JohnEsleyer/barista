@@ -269,6 +269,8 @@ Kotlin compiles to standard JVM bytecode, so the parser needs no Kotlin-specific
 
 Please include a fixture and an integration test with compiler changes whenever possible.
 
+Before investigating a non-obvious issue, check [`docs/case-studies/`](docs/case-studies/) for prior findings. After solving a unique problem, record it using the template in [`docs/conventions.md`](docs/conventions.md) so the next contributor — human or AI — does not have to rediscover it.
+
 ---
 
 ## License

@@ -29,6 +29,10 @@ dirs:
         enabled: true
         extensions:
             - go
+    docs:
+        enabled: true
+        extensions:
+            - md
     internal:
         enabled: true
         extensions:
